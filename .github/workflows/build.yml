@@ -22,6 +22,11 @@ jobs:
           java-version: '17'
           distribution: 'temurin'
 
+      - name: Accept Android SDK Licenses
+        shell: bash
+        run: |
+          yes | $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager --licenses || true
+
       - name: Generate Complete Android Project Structure
         shell: bash
         run: |
@@ -48,14 +53,14 @@ jobs:
 
           cat << 'EOF' > build.gradle.kts
           plugins {
-              id("com.android.application") version "8.7.3" apply false
-              id("org.jetbrains.kotlin.android") version "2.0.21" apply false
-              id("org.jetbrains.kotlin.plugin.compose") version "2.0.21" apply false
+              id("com.android.application") version "8.5.2" apply false
+              id("org.jetbrains.kotlin.android") version "2.0.20" apply false
+              id("org.jetbrains.kotlin.plugin.compose") version "2.0.20" apply false
           }
           EOF
 
           cat << 'EOF' > gradle.properties
-          org.gradle.jvmargs=-Xmx2048m -Dfile.encoding=UTF-8
+          org.gradle.jvmargs=-Xmx4096m -XX:MaxMetaspaceSize=1024m -Dfile.encoding=UTF-8
           android.useAndroidX=true
           kotlin.code.style=official
           android.nonTransitiveRClass=true
@@ -70,12 +75,12 @@ jobs:
 
           android {
               namespace = "com.trifocus.ias"
-              compileSdk = 35
+              compileSdk = 34
 
               defaultConfig {
                   applicationId = "com.trifocus.ias"
                   minSdk = 26
-                  targetSdk = 35
+                  targetSdk = 34
                   versionCode = 4
                   versionName = "4.0-GuardianCabinEdition"
               }
@@ -95,17 +100,16 @@ jobs:
           }
 
           dependencies {
-              val composeBom = platform("androidx.compose:compose-bom:2024.10.01")
+              val composeBom = platform("androidx.compose:compose-bom:2024.09.00")
               implementation(composeBom)
 
-              implementation("androidx.core:core-ktx:1.15.0")
-              implementation("androidx.lifecycle:lifecycle-runtime-ktx:2.8.7")
-              implementation("androidx.activity:activity-compose:1.9.3")
+              implementation("androidx.core:core-ktx:1.13.1")
+              implementation("androidx.lifecycle:lifecycle-runtime-ktx:2.8.6")
+              implementation("androidx.activity:activity-compose:1.9.2")
 
               implementation("androidx.compose.ui:ui")
               implementation("androidx.compose.ui:ui-graphics")
               implementation("androidx.compose.material3:material3")
-              implementation("androidx.compose.material:material-icons-extended")
           }
           EOF
 
@@ -418,4 +422,3178 @@ jobs:
                       setSound(alarmSound, audioAttrs)
                   }
                   manager.createNotificationChannel(channel)
-                  
+
+                  val tapIntent = Intent(context, MainActivity::class.java).apply {
+                      flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK
+                  }
+                  val pendingTap = PendingIntent.getActivity(
+                      context, id, tapIntent,
+                      PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+                  )
+
+                  val builder = NotificationCompat.Builder(context, channelId)
+                      .setSmallIcon(android.R.drawable.ic_lock_idle_alarm)
+                      .setContentTitle(title)
+                      .setContentText(message)
+                      .setStyle(NotificationCompat.BigTextStyle().bigText(message))
+                      .setPriority(NotificationCompat.PRIORITY_MAX)
+                      .setCategory(NotificationCompat.CATEGORY_ALARM)
+                      .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
+                      .setSound(alarmSound)
+                      .setAutoCancel(true)
+                      .setContentIntent(pendingTap)
+                      .setFullScreenIntent(pendingTap, true)
+
+                  if (taskId != null) {
+                      val doneIntent = Intent(context, ReminderReceiver::class.java).apply {
+                          action = "com.trifocus.ias.ACTION_MARK_DONE"
+                          putExtra("TASK_ID", taskId)
+                          putExtra("NOTIFICATION_ID", id)
+                      }
+                      val donePending = PendingIntent.getBroadcast(
+                          context, id + 1, doneIntent,
+                          PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+                      )
+
+                      val snoozeIntent = Intent(context, ReminderReceiver::class.java).apply {
+                          action = "com.trifocus.ias.ACTION_SNOOZE_15"
+                          putExtra("TASK_ID", taskId)
+                          putExtra("NOTIFICATION_ID", id)
+                      }
+                      val snoozePending = PendingIntent.getBroadcast(
+                          context, id + 2, snoozeIntent,
+                          PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+                      )
+
+                      builder.addAction(android.R.drawable.checkbox_on_background, "Mark Done", donePending)
+                      builder.addAction(android.R.drawable.ic_popup_reminder, "Snooze 15m (Max 1)", snoozePending)
+                  }
+
+                  if (isBedtime) {
+                      val rolloverIntent = Intent(context, ReminderReceiver::class.java).apply {
+                          action = "com.trifocus.ias.ACTION_LAZY_ROLLOVER"
+                          putExtra("NOTIFICATION_ID", id)
+                      }
+                      val rolloverPending = PendingIntent.getBroadcast(
+                          context, id + 3, rolloverIntent,
+                          PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+                      )
+                      builder.addAction(
+                          android.R.drawable.ic_menu_rotate,
+                          "1-Tap Rollover & Sleep",
+                          rolloverPending
+                      )
+                  }
+
+                  if (isWakeUp) {
+                      val wakeIntent = Intent(context, ReminderReceiver::class.java).apply {
+                          action = "com.trifocus.ias.ACTION_WAKE_CONFIRM"
+                          putExtra("NOTIFICATION_ID", id)
+                      }
+                      val wakePending = PendingIntent.getBroadcast(
+                          context, id + 4, wakeIntent,
+                          PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+                      )
+                      builder.addAction(
+                          android.R.drawable.checkbox_on_background,
+                          "I'm Awake & At Desk",
+                          wakePending
+                      )
+                  }
+
+                  manager.notify(id, builder.build())
+              }
+          }
+
+          object PlannerWindowManager {
+              fun isMorningPlannerWindowOpen(context: Context): Boolean {
+                  val prefs = context.getSharedPreferences("trifocus_prefs", Context.MODE_PRIVATE)
+                  val wakeHour = prefs.getInt("wake_hour", 5)
+                  val now = Calendar.getInstance()
+                  val hour = now.get(Calendar.HOUR_OF_DAY)
+                  val minute = now.get(Calendar.MINUTE)
+                  val nowMins = hour * 60 + minute
+                  val startMins = wakeHour * 60
+                  val endMins = 9 * 60 + 30
+                  return nowMins in startMins..endMins
+              }
+
+              fun isNightBrainLockoutActive(context: Context): Boolean {
+                  val prefs = context.getSharedPreferences("trifocus_prefs", Context.MODE_PRIVATE)
+                  val bedHour = prefs.getInt("bed_hour", 22)
+                  val wakeHour = prefs.getInt("wake_hour", 5)
+                  val hour = Calendar.getInstance().get(Calendar.HOUR_OF_DAY)
+                  return hour >= (bedHour - 2).coerceAtLeast(20) || hour < wakeHour
+              }
+
+              fun getBrainModeLabel(context: Context): String {
+                  return when {
+                      isMorningPlannerWindowOpen(context) ->
+                          "6AM PLANNER MODE (05:30–09:30): Contract Open"
+                      isNightBrainLockoutActive(context) ->
+                          "10PM BRAIN LOCKOUT: Zero Renegotiation Allowed"
+                      else ->
+                          "EXECUTOR MODE: Execute Morning Contract"
+                  }
+              }
+          }
+
+          object GuardianLockManager {
+              private const val PREFS_NAME = "trifocus_prefs"
+              private const val KEY_PIN_HASH = "guardian_pin_hash"
+              private const val KEY_IS_LOCKED = "guardian_is_locked"
+              private const val KEY_PARTNER_NAME = "guardian_partner_name"
+              private const val KEY_LOCK_ADD_TASKS = "guardian_lock_add_tasks"
+              private const val KEY_ENFORCE_BRAIN_SPLIT = "guardian_enforce_brain_split"
+              private const val KEY_TAMPER_COUNT = "guardian_tamper_count"
+              private const val KEY_LAST_TAMPER_LOG = "guardian_last_tamper_log"
+              private const val KEY_LAST_SUNDAY_AUDIT = "guardian_last_sunday_audit"
+
+              fun hashString(raw: String): String {
+                  val salted = "TriFocus_Guardian_Salt_v4::$raw"
+                  val bytes = MessageDigest.getInstance("SHA-256").digest(salted.toByteArray())
+                  return bytes.joinToString("") { "%02x".format(it) }
+              }
+
+              fun shortVerificationCode(payload: String): String {
+                  return hashString(payload).take(8).uppercase()
+              }
+
+              fun hasPasswordSet(context: Context): Boolean {
+                  val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+                  return !prefs.getString(KEY_PIN_HASH, null).isNullOrBlank()
+              }
+
+              fun isLocked(context: Context): Boolean {
+                  val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+                  return prefs.getBoolean(KEY_IS_LOCKED, false) && hasPasswordSet(context)
+              }
+
+              fun isBrainSplitEnforced(context: Context): Boolean {
+                  return context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+                      .getBoolean(KEY_ENFORCE_BRAIN_SPLIT, true)
+              }
+
+              fun isAddTaskBlockedRightNow(context: Context): Boolean {
+                  if (!isLocked(context)) return false
+                  val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+                  val strictLock = prefs.getBoolean(KEY_LOCK_ADD_TASKS, false)
+                  val brainSplit = prefs.getBoolean(KEY_ENFORCE_BRAIN_SPLIT, true)
+                  return strictLock || (brainSplit && !PlannerWindowManager.isMorningPlannerWindowOpen(context))
+              }
+
+              fun getAddTaskLockedPref(context: Context): Boolean {
+                  return context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+                      .getBoolean(KEY_LOCK_ADD_TASKS, false)
+              }
+
+              fun getPartnerName(context: Context): String {
+                  return context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+                      .getString(KEY_PARTNER_NAME, "Accountability Partner") ?: "Accountability Partner"
+              }
+
+              fun setGuardianPasswordAndLock(
+                  context: Context,
+                  partnerName: String,
+                  rawPassword: String,
+                  lockAddTasks: Boolean,
+                  enforceBrainSplit: Boolean
+              ) {
+                  context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE).edit()
+                      .putString(KEY_PARTNER_NAME, partnerName.ifBlank { "Accountability Partner" })
+                      .putString(KEY_PIN_HASH, hashString(rawPassword))
+                      .putBoolean(KEY_IS_LOCKED, true)
+                      .putBoolean(KEY_LOCK_ADD_TASKS, lockAddTasks)
+                      .putBoolean(KEY_ENFORCE_BRAIN_SPLIT, enforceBrainSplit)
+                      .apply()
+              }
+
+              fun lockExisting(context: Context) {
+                  if (hasPasswordSet(context)) {
+                      context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+                          .edit().putBoolean(KEY_IS_LOCKED, true).apply()
+                  }
+              }
+
+              fun verifyAndUnlock(context: Context, candidatePassword: String): Boolean {
+                  val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+                  val storedHash = prefs.getString(KEY_PIN_HASH, null) ?: return false
+                  return if (hashString(candidatePassword) == storedHash) {
+                      prefs.edit().putBoolean(KEY_IS_LOCKED, false).apply()
+                      true
+                  } else {
+                      recordTamperEvent(context, "Failed password unlock attempt")
+                      false
+                  }
+              }
+
+              fun verifyActionPassword(context: Context, candidatePassword: String): Boolean {
+                  val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+                  val storedHash = prefs.getString(KEY_PIN_HASH, null) ?: return false
+                  return if (hashString(candidatePassword) == storedHash) {
+                      true
+                  } else {
+                      recordTamperEvent(context, "Failed password on protected action")
+                      false
+                  }
+              }
+
+              fun recordTamperEvent(context: Context, reason: String) {
+                  val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+                  val count = prefs.getInt(KEY_TAMPER_COUNT, 0) + 1
+                  val stamp = SimpleDateFormat("dd MMM HH:mm", Locale.getDefault()).format(Date())
+                  prefs.edit()
+                      .putInt(KEY_TAMPER_COUNT, count)
+                      .putString(KEY_LAST_TAMPER_LOG, "$stamp - $reason")
+                      .apply()
+              }
+
+              fun getTamperCount(context: Context): Int {
+                  return context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+                      .getInt(KEY_TAMPER_COUNT, 0)
+              }
+
+              fun getLastTamperLog(context: Context): String {
+                  return context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+                      .getString(KEY_LAST_TAMPER_LOG, "Zero tamper events recorded") ?: "Zero tamper events recorded"
+              }
+
+              fun signOffSundayAudit(context: Context) {
+                  val stamp = SimpleDateFormat("EEE, dd MMM HH:mm", Locale.getDefault()).format(Date())
+                  context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE).edit()
+                      .putInt(KEY_TAMPER_COUNT, 0)
+                      .putString(KEY_LAST_TAMPER_LOG, "Cleared at Sunday Audit ($stamp)")
+                      .putString(KEY_LAST_SUNDAY_AUDIT, stamp)
+                      .apply()
+              }
+
+              fun getLastSundayAudit(context: Context): String {
+                  return context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+                      .getString(KEY_LAST_SUNDAY_AUDIT, "Pending first Sunday Partner Sign-Off")
+                      ?: "Pending first Sunday Partner Sign-Off"
+              }
+          }
+
+          object ScreenTimeTracker {
+              fun hasUsagePermission(context: Context): Boolean {
+                  val appOps = context.getSystemService(Context.APP_OPS_SERVICE) as AppOpsManager
+                  val mode = appOps.checkOpNoThrow(
+                      AppOpsManager.OPSTR_GET_USAGE_STATS,
+                      Process.myUid(),
+                      context.packageName
+                  )
+                  return mode == AppOpsManager.MODE_ALLOWED
+              }
+
+              fun isIgnoringBatteryOptimizations(context: Context): Boolean {
+                  val pm = context.getSystemService(Context.POWER_SERVICE) as PowerManager
+                  return pm.isIgnoringBatteryOptimizations(context.packageName)
+              }
+
+              fun getTodayScreenMinutes(context: Context): Int {
+                  if (!hasUsagePermission(context)) return 0
+                  val usageStatsManager =
+                      context.getSystemService(Context.USAGE_STATS_SERVICE) as UsageStatsManager
+                  val cal = Calendar.getInstance().apply {
+                      set(Calendar.HOUR_OF_DAY, 0)
+                      set(Calendar.MINUTE, 0)
+                      set(Calendar.SECOND, 0)
+                      set(Calendar.MILLISECOND, 0)
+                  }
+                  val stats = usageStatsManager.queryUsageStats(
+                      UsageStatsManager.INTERVAL_DAILY,
+                      cal.timeInMillis,
+                      System.currentTimeMillis()
+                  )
+                  val totalMillis = stats?.sumOf { it.totalTimeInForeground } ?: 0L
+                  return (totalMillis / 60000L).toInt()
+              }
+          }
+
+          object AlarmScheduler {
+
+              fun scheduleTaskAlarm(context: Context, task: TaskItem) {
+                  if (task.isCompleted) {
+                      cancelTaskAlarm(context, task.id)
+                      return
+                  }
+                  val parts = task.timeString.split(":")
+                  if (parts.size != 2) return
+                  val hour = parts[0].toIntOrNull() ?: return
+                  val minute = parts[1].toIntOrNull() ?: return
+
+                  val now = Calendar.getInstance()
+                  val calendar = Calendar.getInstance().apply {
+                      set(Calendar.HOUR_OF_DAY, hour)
+                      set(Calendar.MINUTE, minute)
+                      set(Calendar.SECOND, 0)
+                      set(Calendar.MILLISECOND, 0)
+                      if (task.isTomorrow) {
+                          add(Calendar.DAY_OF_YEAR, 1)
+                      } else if (before(now)) {
+                          add(Calendar.DAY_OF_YEAR, 1)
+                      }
+                  }
+
+                  val intent = Intent(context, ReminderReceiver::class.java).apply {
+                      putExtra("TITLE", "[${task.category.label}] ${task.title}")
+                      putExtra("MESSAGE", "Scheduled block started! Tap 'Mark Done' when completed.")
+                      putExtra("NOTIFICATION_ID", task.id.hashCode())
+                      putExtra("TASK_ID", task.id)
+                  }
+
+                  val pendingIntent = PendingIntent.getBroadcast(
+                      context,
+                      task.id.hashCode(),
+                      intent,
+                      PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+                  )
+
+                  setExactSafe(context, calendar.timeInMillis, pendingIntent)
+              }
+
+              fun scheduleSnoozeAlarm(context: Context, task: TaskItem, snoozeMinutes: Int) {
+                  val triggerAt = System.currentTimeMillis() + (snoozeMinutes * 60 * 1000L)
+                  val intent = Intent(context, ReminderReceiver::class.java).apply {
+                      putExtra("TITLE", "SNOOZE UP: [${task.category.label}] ${task.title}")
+                      putExtra("MESSAGE", "15-min snooze expired! Execute now and tap 'Mark Done'.")
+                      putExtra("NOTIFICATION_ID", task.id.hashCode())
+                      putExtra("TASK_ID", task.id)
+                  }
+                  val pendingIntent = PendingIntent.getBroadcast(
+                      context,
+                      task.id.hashCode(),
+                      intent,
+                      PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+                  )
+                  setExactSafe(context, triggerAt, pendingIntent)
+              }
+
+              fun cancelTaskAlarm(context: Context, taskId: String) {
+                  val intent = Intent(context, ReminderReceiver::class.java)
+                  val pendingIntent = PendingIntent.getBroadcast(
+                      context,
+                      taskId.hashCode(),
+                      intent,
+                      PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+                  )
+                  val alarmManager = context.getSystemService(Context.ALARM_SERVICE) as AlarmManager
+                  alarmManager.cancel(pendingIntent)
+              }
+
+              fun scheduleAllRoutineAlarms(context: Context) {
+                  val prefs = context.getSharedPreferences("trifocus_prefs", Context.MODE_PRIVATE)
+                  val wakeHour = prefs.getInt("wake_hour", 5)
+                  val wakeMin = prefs.getInt("wake_min", 30)
+                  val bedHour = prefs.getInt("bed_hour", 22)
+                  val bedMin = prefs.getInt("bed_min", 0)
+
+                  val windDownCal = Calendar.getInstance().apply {
+                      set(Calendar.HOUR_OF_DAY, bedHour)
+                      set(Calendar.MINUTE, bedMin)
+                      add(Calendar.MINUTE, -15)
+                  }
+
+                  scheduleExactDaily(
+                      context = context,
+                      hour = wakeHour,
+                      minute = wakeMin,
+                      requestCode = 9000,
+                      title = "MORNING WAKE-UP CALL (%02d:%02d)".format(wakeHour, wakeMin),
+                      message = "Tap 'I'm Awake & At Desk' to log your wake variance & unlock Morning Planner!",
+                      isBedtime = false,
+                      isWakeUp = true,
+                      forceNextDay = false
+                  )
+
+                  scheduleExactDaily(
+                      context = context,
+                      hour = 13,
+                      minute = 30,
+                      requestCode = 9001,
+                      title = "Mid-Day Executor Check-In",
+                      message = "Don't let tasks pile up. Check off morning UPSC blocks & protect your afternoon.",
+                      isBedtime = false,
+                      isWakeUp = false,
+                      forceNextDay = false
+                  )
+
+                  scheduleExactDaily(
+                      context = context,
+                      hour = 18,
+                      minute = 30,
+                      requestCode = 9002,
+                      title = "Evening Progress Check",
+                      message = "Wrap up Reading Room & Coding chores now so evening UPSC revision stays untouched.",
+                      isBedtime = false,
+                      isWakeUp = false,
+                      forceNextDay = false
+                  )
+
+                  scheduleExactDaily(
+                      context = context,
+                      hour = windDownCal.get(Calendar.HOUR_OF_DAY),
+                      minute = windDownCal.get(Calendar.MINUTE),
+                      requestCode = 9003,
+                      title = "15 Mins to %02d:%02d Sleep Cutoff!".format(bedHour, bedMin),
+                      message = "Tap '1-Tap Rollover & Sleep' right here on the notification to auto-plan tomorrow and shut down screens.",
+                      isBedtime = true,
+                      isWakeUp = false,
+                      forceNextDay = false
+                  )
+
+                  scheduleExactDaily(
+                      context = context,
+                      hour = bedHour,
+                      minute = bedMin,
+                      requestCode = 9004,
+                      title = "%02d:%02d SLEEP LOCKOUT — PUT PHONE DOWN".format(bedHour, bedMin),
+                      message = "10PM Brain Lockout active. Tap '1-Tap Rollover & Sleep' now and close your eyes!",
+                      isBedtime = true,
+                      isWakeUp = false,
+                      forceNextDay = false
+                  )
+
+                  StorageHelper.loadTasks(context)
+                      .filter { !it.isCompleted }
+                      .forEach { scheduleTaskAlarm(context, it) }
+
+                  scheduleScreenCheckPulse(context)
+              }
+
+              fun scheduleScreenCheckPulse(context: Context) {
+                  val triggerAt = System.currentTimeMillis() + (15 * 60 * 1000L)
+                  val intent = Intent(context, ReminderReceiver::class.java).apply {
+                      action = "com.trifocus.ias.ACTION_SCREEN_CHECK"
+                  }
+                  val pendingIntent = PendingIntent.getBroadcast(
+                      context,
+                      9090,
+                      intent,
+                      PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+                  )
+                  setExactSafe(context, triggerAt, pendingIntent)
+              }
+
+              fun scheduleExactDaily(
+                  context: Context,
+                  hour: Int,
+                  minute: Int,
+                  requestCode: Int,
+                  title: String,
+                  message: String,
+                  isBedtime: Boolean,
+                  isWakeUp: Boolean,
+                  forceNextDay: Boolean
+              ) {
+                  val now = Calendar.getInstance()
+                  val calendar = Calendar.getInstance().apply {
+                      set(Calendar.HOUR_OF_DAY, hour)
+                      set(Calendar.MINUTE, minute)
+                      set(Calendar.SECOND, 0)
+                      set(Calendar.MILLISECOND, 0)
+                      if (forceNextDay || before(now)) {
+                          add(Calendar.DAY_OF_YEAR, 1)
+                      }
+                  }
+
+                  val intent = Intent(context, ReminderReceiver::class.java).apply {
+                      putExtra("TITLE", title)
+                      putExtra("MESSAGE", message)
+                      putExtra("NOTIFICATION_ID", requestCode)
+                      putExtra("RECURRING_HOUR", hour)
+                      putExtra("RECURRING_MIN", minute)
+                      putExtra("IS_BEDTIME", isBedtime)
+                      putExtra("IS_WAKEUP", isWakeUp)
+                  }
+
+                  val pendingIntent = PendingIntent.getBroadcast(
+                      context,
+                      requestCode,
+                      intent,
+                      PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+                  )
+
+                  setExactSafe(context, calendar.timeInMillis, pendingIntent)
+              }
+
+              private fun setExactSafe(context: Context, triggerAtMillis: Long, pendingIntent: PendingIntent) {
+                  val alarmManager = context.getSystemService(Context.ALARM_SERVICE) as AlarmManager
+                  val showIntent = Intent(context, MainActivity::class.java).apply {
+                      flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK
+                  }
+                  val showPending = PendingIntent.getActivity(
+                      context,
+                      0,
+                      showIntent,
+                      PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+                  )
+                  try {
+                      val clockInfo = AlarmManager.AlarmClockInfo(triggerAtMillis, showPending)
+                      alarmManager.setAlarmClock(clockInfo, pendingIntent)
+                  } catch (e: SecurityException) {
+                      try {
+                          alarmManager.setExactAndAllowWhileIdle(
+                              AlarmManager.RTC_WAKEUP,
+                              triggerAtMillis,
+                              pendingIntent
+                          )
+                      } catch (ex: SecurityException) {
+                          alarmManager.set(AlarmManager.RTC_WAKEUP, triggerAtMillis, pendingIntent)
+                      }
+                  }
+              }
+          }
+          EOF
+
+          cat << 'EOF' > app/src/main/java/com/trifocus/ias/MainActivity.kt
+          package com.trifocus.ias
+
+          import android.Manifest
+          import android.app.TimePickerDialog
+          import android.content.Context
+          import android.content.Intent
+          import android.content.pm.PackageManager
+          import android.net.Uri
+          import android.os.Build
+          import android.os.Bundle
+          import android.provider.Settings
+          import android.widget.Toast
+          import androidx.activity.ComponentActivity
+          import androidx.activity.compose.rememberLauncherForActivityResult
+          import androidx.activity.compose.setContent
+          import androidx.activity.result.contract.ActivityResultContracts
+          import androidx.compose.foundation.background
+          import androidx.compose.foundation.horizontalScroll
+          import androidx.compose.foundation.layout.*
+          import androidx.compose.foundation.lazy.LazyColumn
+          import androidx.compose.foundation.lazy.items
+          import androidx.compose.foundation.rememberScrollState
+          import androidx.compose.foundation.shape.RoundedCornerShape
+          import androidx.compose.foundation.verticalScroll
+          import androidx.compose.material.icons.Icons
+          import androidx.compose.material.icons.filled.*
+          import androidx.compose.material3.*
+          import androidx.compose.runtime.*
+          import androidx.compose.ui.Alignment
+          import androidx.compose.ui.Modifier
+          import androidx.compose.ui.graphics.Color
+          import androidx.compose.ui.platform.LocalContext
+          import androidx.compose.ui.text.font.FontWeight
+          import androidx.compose.ui.text.input.PasswordVisualTransformation
+          import androidx.compose.ui.text.style.TextDecoration
+          import androidx.compose.ui.unit.dp
+          import androidx.compose.ui.unit.sp
+          import androidx.core.content.ContextCompat
+          import kotlinx.coroutines.delay
+          import org.json.JSONArray
+          import org.json.JSONObject
+          import java.text.SimpleDateFormat
+          import java.util.Calendar
+          import java.util.Date
+          import java.util.Locale
+          import java.util.UUID
+
+          enum class PillarCategory(val label: String, val colorHex: Long) {
+              UPSC("UPSC Prep", 0xFF1E88E5),
+              READING_ROOM("Reading Room", 0xFF43A047),
+              CODING("Coding / Dev", 0xFF8E24AA)
+          }
+
+          enum class DashboardSection(val title: String) {
+              PLANNER("Planner"),
+              ANALYTICS("Leak Math"),
+              CABIN("Cabin Ops"),
+              AUDIT("Sunday Audit")
+          }
+
+          data class TaskItem(
+              val id: String = UUID.randomUUID().toString(),
+              val title: String,
+              val category: PillarCategory,
+              val timeString: String,
+              val isCompleted: Boolean = false,
+              val isTomorrow: Boolean = false
+          )
+
+          data class IasHabit(
+              val id: String,
+              val title: String,
+              val isDone: Boolean
+          )
+
+          data class LeakageAnalyticsSnapshot(
+              val todayWakeVarianceMins: Int,
+              val avgWakeVarianceMins: Int,
+              val todaySnoozeCount: Int,
+              val total30DaySnoozes: Int,
+              val snoozeLeakMinutes30d: Int,
+              val postCutoffDriftMins30d: Int,
+              val daysUnderScreenCap: Int,
+              val totalTrackedDays: Int,
+              val netUpscHoursRecovered30d: Float
+          )
+
+          class MainActivity : ComponentActivity() {
+              override fun onCreate(savedInstanceState: Bundle?) {
+                  super.onCreate(savedInstanceState)
+                  AlarmScheduler.scheduleAllRoutineAlarms(this)
+
+                  setContent {
+                      MaterialTheme(
+                          colorScheme = darkColorScheme(
+                              primary = Color(0xFF64B5F6),
+                              secondary = Color(0xFF81C784),
+                              background = Color(0xFF0F1419),
+                              surface = Color(0xFF1A2129)
+                          )
+                      ) {
+                          Surface(
+                              modifier = Modifier.fillMaxSize(),
+                              color = MaterialTheme.colorScheme.background
+                          ) {
+                              TriFocusLazyDashboard()
+                          }
+                      }
+                  }
+              }
+          }
+
+          @OptIn(ExperimentalMaterial3Api::class)
+          @Composable
+          fun TriFocusLazyDashboard() {
+              val context = LocalContext.current
+              val prefs = remember { context.getSharedPreferences("trifocus_prefs", Context.MODE_PRIVATE) }
+
+              val permissionLauncher = rememberLauncherForActivityResult(
+                  ActivityResultContracts.RequestPermission()
+              ) { }
+
+              LaunchedEffect(Unit) {
+                  if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                      if (ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS)
+                          != PackageManager.PERMISSION_GRANTED
+                      ) {
+                          permissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+                      }
+                  }
+              }
+
+              var activeSection by remember { mutableStateOf(DashboardSection.PLANNER) }
+              var tasks by remember { mutableStateOf(StorageHelper.loadTasks(context)) }
+              var habits by remember { mutableStateOf(StorageHelper.loadHabits(context)) }
+              var selectedFilter by remember { mutableStateOf<PillarCategory?>(null) }
+              var showTomorrowTab by remember { mutableStateOf(false) }
+              var showAddDialog by remember { mutableStateOf(false) }
+              var editingTask by remember { mutableStateOf<TaskItem?>(null) }
+              var showScheduleModal by remember { mutableStateOf(false) }
+              var showGuardianModal by remember { mutableStateOf(false) }
+
+              var isGuardianLocked by remember { mutableStateOf(GuardianLockManager.isLocked(context)) }
+              var isAddTaskBlocked by remember { mutableStateOf(GuardianLockManager.isAddTaskBlockedRightNow(context)) }
+              var brainModeLabel by remember { mutableStateOf(PlannerWindowManager.getBrainModeLabel(context)) }
+              var isMorningWindow by remember { mutableStateOf(PlannerWindowManager.isMorningPlannerWindowOpen(context)) }
+              var partnerName by remember { mutableStateOf(GuardianLockManager.getPartnerName(context)) }
+              var tamperCount by remember { mutableIntStateOf(GuardianLockManager.getTamperCount(context)) }
+              var lastTamperLog by remember { mutableStateOf(GuardianLockManager.getLastTamperLog(context)) }
+              var lastSundayAudit by remember { mutableStateOf(GuardianLockManager.getLastSundayAudit(context)) }
+
+              var pendingProtectedAction by remember { mutableStateOf<(() -> Unit)?>(null) }
+              var pendingActionLabel by remember { mutableStateOf("") }
+
+              var wakeHour by remember { mutableIntStateOf(prefs.getInt("wake_hour", 5)) }
+              var wakeMin by remember { mutableIntStateOf(prefs.getInt("wake_min", 30)) }
+              var bedHour by remember { mutableIntStateOf(prefs.getInt("bed_hour", 22)) }
+              var bedMin by remember { mutableIntStateOf(prefs.getInt("bed_min", 0)) }
+              var screenLimitMins by remember { mutableIntStateOf(prefs.getInt("screen_limit_mins", 60)) }
+
+              var hasUsageAccess by remember { mutableStateOf(ScreenTimeTracker.hasUsagePermission(context)) }
+              var isBatteryUnrestricted by remember { mutableStateOf(ScreenTimeTracker.isIgnoringBatteryOptimizations(context)) }
+              var screenMinutes by remember { mutableIntStateOf(ScreenTimeTracker.getTodayScreenMinutes(context)) }
+              var currentHour by remember { mutableIntStateOf(Calendar.getInstance().get(Calendar.HOUR_OF_DAY)) }
+              var lastWakeConfirm by remember { mutableStateOf(prefs.getString("last_wake_confirm", "Not checked in") ?: "Not checked in") }
+
+              var analytics by remember { mutableStateOf(StorageHelper.getLeakageAnalytics(context, screenMinutes, screenLimitMins)) }
+
+              var cabinSeatId by remember { mutableStateOf(StorageHelper.getCabinSeatId(context)) }
+              var cabinManagerName by remember { mutableStateOf(StorageHelper.getCabinManagerName(context)) }
+              var cabinCheckInStamp by remember { mutableStateOf(StorageHelper.getTodayCabinCheckIn(context)) }
+              var cabinDeepMins by remember { mutableIntStateOf(StorageHelper.getTodayCabinDeepMinutes(context)) }
+              var isCabinSessionActive by remember { mutableStateOf(StorageHelper.isCabinSessionActive(context)) }
+
+              fun refreshAllState() {
+                  hasUsageAccess = ScreenTimeTracker.hasUsagePermission(context)
+                  isBatteryUnrestricted = ScreenTimeTracker.isIgnoringBatteryOptimizations(context)
+                  screenMinutes = ScreenTimeTracker.getTodayScreenMinutes(context)
+                  currentHour = Calendar.getInstance().get(Calendar.HOUR_OF_DAY)
+                  tasks = StorageHelper.loadTasks(context)
+                  habits = StorageHelper.loadHabits(context)
+                  isGuardianLocked = GuardianLockManager.isLocked(context)
+                  isAddTaskBlocked = GuardianLockManager.isAddTaskBlockedRightNow(context)
+                  brainModeLabel = PlannerWindowManager.getBrainModeLabel(context)
+                  isMorningWindow = PlannerWindowManager.isMorningPlannerWindowOpen(context)
+                  partnerName = GuardianLockManager.getPartnerName(context)
+                  tamperCount = GuardianLockManager.getTamperCount(context)
+                  lastTamperLog = GuardianLockManager.getLastTamperLog(context)
+                  lastSundayAudit = GuardianLockManager.getLastSundayAudit(context)
+                  lastWakeConfirm = prefs.getString("last_wake_confirm", "Not checked in") ?: "Not checked in"
+                  analytics = StorageHelper.getLeakageAnalytics(context, screenMinutes, screenLimitMins)
+                  cabinSeatId = StorageHelper.getCabinSeatId(context)
+                  cabinManagerName = StorageHelper.getCabinManagerName(context)
+                  cabinCheckInStamp = StorageHelper.getTodayCabinCheckIn(context)
+                  cabinDeepMins = StorageHelper.getTodayCabinDeepMinutes(context)
+                  isCabinSessionActive = StorageHelper.isCabinSessionActive(context)
+              }
+
+              fun runProtected(actionLabel: String, block: () -> Unit) {
+                  if (!isGuardianLocked) {
+                      block()
+                  } else {
+                      pendingActionLabel = actionLabel
+                      pendingProtectedAction = block
+                  }
+              }
+
+              LaunchedEffect(Unit) {
+                  while (true) {
+                      refreshAllState()
+                      delay(5_000L)
+                  }
+              }
+
+              val todayTasks = tasks.filter { !it.isTomorrow }
+              val completedToday = todayTasks.count { it.isCompleted }
+
+              Scaffold(
+                  topBar = {
+                      Column(modifier = Modifier.background(Color(0xFF141A21))) {
+                          TopAppBar(
+                              title = {
+                                  Column {
+                                      Row(
+                                          verticalAlignment = Alignment.CenterVertically,
+                                          horizontalArrangement = Arrangement.spacedBy(6.dp)
+                                      ) {
+                                          Text("TriFocus IAS v4", fontWeight = FontWeight.Bold, fontSize = 17.sp)
+                                          Surface(
+                                              color = if (isGuardianLocked) Color(0xFFB71C1C) else Color(0xFF2E7D32),
+                                              shape = RoundedCornerShape(6.dp)
+                                          ) {
+                                              Text(
+                                                  text = if (isGuardianLocked) "GUARDIAN LOCKED" else "UNLOCKED",
+                                                  fontSize = 9.sp,
+                                                  fontWeight = FontWeight.ExtraBold,
+                                                  color = Color.White,
+                                                  modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                                              )
+                                          }
+                                      }
+                                      Text(
+                                          "Wake %02d:%02d • Sleep %02d:%02d • Cap ${screenLimitMins}m".format(
+                                              wakeHour, wakeMin, bedHour, bedMin
+                                          ),
+                                          fontSize = 11.sp,
+                                          color = Color(0xFFFFD54F)
+                                      )
+                                  }
+                              },
+                              actions = {
+                                  IconButton(onClick = { showGuardianModal = true }) {
+                                      Icon(
+                                          Icons.Default.Lock,
+                                          contentDescription = "Guardian Accountability Lock",
+                                          tint = if (isGuardianLocked) Color(0xFFEF5350) else Color(0xFF81C784)
+                                      )
+                                  }
+
+                                  IconButton(onClick = { showScheduleModal = true }) {
+                                      Icon(
+                                          Icons.Default.Notifications,
+                                          contentDescription = "Wake & Sleep Schedule",
+                                          tint = Color(0xFFFFD54F)
+                                      )
+                                  }
+                              },
+                              colors = TopAppBarDefaults.topAppBarColors(containerColor = Color(0xFF141A21))
+                          )
+
+                          TabRow(
+                              selectedTabIndex = activeSection.ordinal,
+                              containerColor = Color(0xFF141A21),
+                              contentColor = Color(0xFF64B5F6)
+                          ) {
+                              DashboardSection.entries.forEach { section ->
+                                  Tab(
+                                      selected = activeSection == section,
+                                      onClick = { activeSection = section },
+                                      text = {
+                                          Text(
+                                              section.title,
+                                              fontSize = 11.sp,
+                                              fontWeight = if (activeSection == section) FontWeight.Bold else FontWeight.Normal
+                                          )
+                                      }
+                                  )
+                              }
+                          }
+                      }
+                  },
+                  floatingActionButton = {
+                      if (activeSection == DashboardSection.PLANNER) {
+                          ExtendedFloatingActionButton(
+                              onClick = {
+                                  if (isAddTaskBlocked) {
+                                      runProtected("Modify Contract Outside 6AM Planner Window") {
+                                          editingTask = null
+                                          showAddDialog = true
+                                      }
+                                  } else {
+                                      editingTask = null
+                                      showAddDialog = true
+                                  }
+                              },
+                              containerColor = if (isAddTaskBlocked) Color(0xFF455A64) else Color(0xFF1E88E5),
+                              contentColor = Color.White,
+                              icon = {
+                                  Icon(
+                                      if (isAddTaskBlocked) Icons.Default.Lock else Icons.Default.Add,
+                                      contentDescription = "Add Task"
+                                  )
+                              },
+                              text = {
+                                  Text(
+                                      when {
+                                          isAddTaskBlocked -> "Executor Locked"
+                                          showTomorrowTab -> "Plan Tomorrow"
+                                          else -> "Add Block"
+                                      }
+                                  )
+                              }
+                          )
+                      }
+                  }
+              ) { padding ->
+                  Column(
+                      modifier = Modifier
+                          .fillMaxSize()
+                          .padding(padding)
+                          .padding(horizontal = 14.dp)
+                  ) {
+                      Spacer(modifier = Modifier.height(8.dp))
+
+                      BrainSeparationBanner(
+                          brainModeLabel = brainModeLabel,
+                          isMorningWindow = isMorningWindow,
+                          isGuardianLocked = isGuardianLocked,
+                          lastWakeConfirm = lastWakeConfirm,
+                          tamperCount = tamperCount,
+                          onOpenGuardian = { showGuardianModal = true }
+                      )
+
+                      Spacer(modifier = Modifier.height(8.dp))
+
+                      when (activeSection) {
+                          DashboardSection.PLANNER -> {
+                              PlannerSectionContent(
+                                  context = context,
+                                  isBatteryUnrestricted = isBatteryUnrestricted,
+                                  currentHour = currentHour,
+                                  bedHour = bedHour,
+                                  bedMin = bedMin,
+                                  wakeHour = wakeHour,
+                                  wakeMin = wakeMin,
+                                  hasUsageAccess = hasUsageAccess,
+                                  screenMinutes = screenMinutes,
+                                  screenLimitMins = screenLimitMins,
+                                  habits = habits,
+                                  tasks = tasks,
+                                  todayTasks = todayTasks,
+                                  completedToday = completedToday,
+                                  showTomorrowTab = showTomorrowTab,
+                                  selectedFilter = selectedFilter,
+                                  isGuardianLocked = isGuardianLocked,
+                                  onToggleTomorrowTab = { showTomorrowTab = it },
+                                  onSelectFilter = { selectedFilter = it },
+                                  onRefresh = { refreshAllState() },
+                                  onRunProtected = { label, block -> runProtected(label, block) },
+                                  onEditTask = { task ->
+                                      editingTask = task
+                                      showAddDialog = true
+                                  }
+                              )
+                          }
+
+                          DashboardSection.ANALYTICS -> {
+                              LeakageAnalyticsSection(
+                                  analytics = analytics,
+                                  screenMinutes = screenMinutes,
+                                  screenLimitMins = screenLimitMins,
+                                  wakeHour = wakeHour,
+                                  wakeMin = wakeMin,
+                                  onLogWakeNow = {
+                                      val variance = StorageHelper.recordMorningWakeCheckIn(context)
+                                      refreshAllState()
+                                      Toast.makeText(
+                                          context,
+                                          "Wake Check-In Recorded (Variance: ${variance}m)",
+                                          Toast.LENGTH_SHORT
+                                      ).show()
+                                  }
+                              )
+                          }
+
+                          DashboardSection.CABIN -> {
+                              CabinAccountabilitySection(
+                                  context = context,
+                                  cabinSeatId = cabinSeatId,
+                                  cabinManagerName = cabinManagerName,
+                                  cabinCheckInStamp = cabinCheckInStamp,
+                                  cabinDeepMins = cabinDeepMins,
+                                  isSessionActive = isCabinSessionActive,
+                                  isGuardianLocked = isGuardianLocked,
+                                  lastWakeConfirm = lastWakeConfirm,
+                                  completedToday = completedToday,
+                                  totalToday = todayTasks.size,
+                                  habitsDone = habits.count { it.isDone },
+                                  habitsTotal = habits.size,
+                                  screenMinutes = screenMinutes,
+                                  screenLimitMins = screenLimitMins,
+                                  tamperCount = tamperCount,
+                                  onUpdateCabinConfig = { newSeat, newMgr ->
+                                      runProtected("Change Reading Room Cabin Seat / Manager") {
+                                          StorageHelper.setCabinConfig(context, newSeat, newMgr)
+                                          refreshAllState()
+                                      }
+                                  },
+                                  onToggleCabinSession = {
+                                      StorageHelper.toggleCabinDeepSession(context)
+                                      refreshAllState()
+                                  }
+                              )
+                          }
+
+                          DashboardSection.AUDIT -> {
+                              ZeroCheatProtocolAndAuditSection(
+                                  context = context,
+                                  hasUsageAccess = hasUsageAccess,
+                                  isBatteryUnrestricted = isBatteryUnrestricted,
+                                  isGuardianLocked = isGuardianLocked,
+                                  partnerName = partnerName,
+                                  wakeHour = wakeHour,
+                                  wakeMin = wakeMin,
+                                  bedHour = bedHour,
+                                  bedMin = bedMin,
+                                  screenLimitMins = screenLimitMins,
+                                  tamperCount = tamperCount,
+                                  lastTamperLog = lastTamperLog,
+                                  lastSundayAudit = lastSundayAudit,
+                                  analytics = analytics,
+                                  completedToday = completedToday,
+                                  totalToday = todayTasks.size,
+                                  cabinSeatId = cabinSeatId,
+                                  cabinDeepMins = cabinDeepMins,
+                                  onOpenGuardianModal = { showGuardianModal = true },
+                                  onPartnerSignOffSunday = {
+                                      runProtected("Partner 60-Second Sunday Audit Sign-Off") {
+                                          GuardianLockManager.signOffSundayAudit(context)
+                                          refreshAllState()
+                                          Toast.makeText(
+                                              context,
+                                              "Sunday Audit Verified & Signed Off by $partnerName!",
+                                              Toast.LENGTH_LONG
+                                          ).show()
+                                      }
+                                  }
+                              )
+                          }
+                      }
+                  }
+              }
+
+              if (showAddDialog) {
+                  AddOrEditTaskModal(
+                      existingTask = editingTask,
+                      defaultTomorrow = showTomorrowTab,
+                      onDismiss = {
+                          showAddDialog = false
+                          editingTask = null
+                      },
+                      onSave = { savedTask ->
+                          val updated = if (editingTask != null) {
+                              tasks.map { if (it.id == savedTask.id) savedTask else it }
+                          } else {
+                              tasks + savedTask
+                          }
+                          tasks = updated
+                          StorageHelper.saveTasks(context, updated)
+                          AlarmScheduler.scheduleTaskAlarm(context, savedTask)
+                          showAddDialog = false
+                          editingTask = null
+                      }
+                  )
+              }
+
+              if (showScheduleModal) {
+                  ScheduleAndSleepModal(
+                      isLocked = isGuardianLocked,
+                      wakeHour = wakeHour,
+                      wakeMin = wakeMin,
+                      bedHour = bedHour,
+                      bedMin = bedMin,
+                      screenLimitMins = screenLimitMins,
+                      unfinishedCount = todayTasks.count { !it.isCompleted },
+                      onUpdateWakeTime = { h, m ->
+                          runProtected("Change Morning Wake-Up Time") {
+                              wakeHour = h
+                              wakeMin = m
+                              prefs.edit().putInt("wake_hour", h).putInt("wake_min", m).apply()
+                              AlarmScheduler.scheduleAllRoutineAlarms(context)
+                              Toast.makeText(
+                                  context,
+                                  "Morning Wake-Up set to %02d:%02d".format(h, m),
+                                  Toast.LENGTH_SHORT
+                              ).show()
+                          }
+                      },
+                      onUpdateBedtime = { h, m ->
+                          runProtected("Change Night Sleep Cutoff Time") {
+                              bedHour = h
+                              bedMin = m
+                              prefs.edit().putInt("bed_hour", h).putInt("bed_min", m).apply()
+                              AlarmScheduler.scheduleAllRoutineAlarms(context)
+                              Toast.makeText(
+                                  context,
+                                  "Sleep Cutoff set to %02d:%02d (with 15m wind-down)".format(h, m),
+                                  Toast.LENGTH_SHORT
+                              ).show()
+                          }
+                      },
+                      onUpdateScreenLimit = { newLimit ->
+                          runProtected("Change Daily Screen Time Limit") {
+                              screenLimitMins = newLimit
+                              prefs.edit().putInt("screen_limit_mins", newLimit).apply()
+                              refreshAllState()
+                              Toast.makeText(
+                                  context,
+                                  "Screen Time Limit set to $newLimit mins",
+                                  Toast.LENGTH_SHORT
+                              ).show()
+                          }
+                      },
+                      onLogWakeUpNow = {
+                          val variance = StorageHelper.recordMorningWakeCheckIn(context)
+                          refreshAllState()
+                          Toast.makeText(context, "Wake-Up Logged (Variance: ${variance}m)!", Toast.LENGTH_SHORT).show()
+                      },
+                      onRolloverAndStartNewDay = {
+                          if (currentHour >= 20 || currentHour < 4) {
+                              StorageHelper.performLazyNightRollover(context)
+                              refreshAllState()
+                              showScheduleModal = false
+                              showTomorrowTab = false
+                              Toast.makeText(
+                                  context,
+                                  "Tomorrow's Plan Activated! Put your phone away.",
+                                  Toast.LENGTH_LONG
+                              ).show()
+                          } else {
+                              runProtected("Perform Daytime Task Rollover") {
+                                  StorageHelper.performLazyNightRollover(context)
+                                  refreshAllState()
+                                  showScheduleModal = false
+                                  showTomorrowTab = false
+                              }
+                          }
+                      },
+                      onDismiss = { showScheduleModal = false }
+                  )
+              }
+
+              if (showGuardianModal) {
+                  GuardianLockModal(
+                      isLocked = isGuardianLocked,
+                      hasExistingPassword = GuardianLockManager.hasPasswordSet(context),
+                      currentPartnerName = partnerName,
+                      currentLockAddTasks = GuardianLockManager.getAddTaskLockedPref(context),
+                      currentEnforceBrainSplit = GuardianLockManager.isBrainSplitEnforced(context),
+                      tamperCount = tamperCount,
+                      lastTamperLog = lastTamperLog,
+                      lastWakeConfirm = lastWakeConfirm,
+                      onSetPasswordAndLock = { partner, pass, lockAdd, brainSplit ->
+                          GuardianLockManager.setGuardianPasswordAndLock(
+                              context,
+                              partner,
+                              pass,
+                              lockAdd,
+                              brainSplit
+                          )
+                          refreshAllState()
+                          showGuardianModal = false
+                          Toast.makeText(
+                              context,
+                              "Guardian Lock Armed by $partner! 6AM/10PM Split Active.",
+                              Toast.LENGTH_LONG
+                          ).show()
+                      },
+                      onRelockExisting = {
+                          GuardianLockManager.lockExisting(context)
+                          refreshAllState()
+                          showGuardianModal = false
+                          Toast.makeText(context, "Guardian Lock Re-Armed!", Toast.LENGTH_SHORT).show()
+                      },
+                      onAttemptUnlock = { candidate ->
+                          val ok = GuardianLockManager.verifyAndUnlock(context, candidate)
+                          refreshAllState()
+                          if (ok) {
+                              showGuardianModal = false
+                              Toast.makeText(context, "Unlocked by Accountability Partner", Toast.LENGTH_SHORT).show()
+                          } else {
+                              Toast.makeText(context, "WRONG PASSWORD! Tamper attempt logged.", Toast.LENGTH_LONG).show()
+                          }
+                      },
+                      onResetTamper = {
+                          GuardianLockManager.signOffSundayAudit(context)
+                          refreshAllState()
+                      },
+                      onDismiss = { showGuardianModal = false }
+                  )
+              }
+
+              if (pendingProtectedAction != null) {
+                  GuardianActionVerifyDialog(
+                      actionLabel = pendingActionLabel,
+                      partnerName = partnerName,
+                      onVerify = { pass ->
+                          if (GuardianLockManager.verifyActionPassword(context, pass)) {
+                              val action = pendingProtectedAction
+                              pendingProtectedAction = null
+                              action?.invoke()
+                              refreshAllState()
+                          } else {
+                              refreshAllState()
+                              Toast.makeText(
+                                  context,
+                                  "Access Denied! Wrong Partner Password (Tamper Logged).",
+                                  Toast.LENGTH_LONG
+                              ).show()
+                          }
+                      },
+                      onDismiss = { pendingProtectedAction = null }
+                  )
+              }
+          }
+
+          @Composable
+          fun BrainSeparationBanner(
+              brainModeLabel: String,
+              isMorningWindow: Boolean,
+              isGuardianLocked: Boolean,
+              lastWakeConfirm: String,
+              tamperCount: Int,
+              onOpenGuardian: () -> Unit
+          ) {
+              Card(
+                  shape = RoundedCornerShape(10.dp),
+                  colors = CardDefaults.cardColors(
+                      containerColor = when {
+                          !isGuardianLocked -> Color(0xFF17261C)
+                          isMorningWindow -> Color(0xFF152938)
+                          else -> Color(0xFF28161B)
+                      }
+                  ),
+                  modifier = Modifier.fillMaxWidth()
+              ) {
+                  Row(
+                      modifier = Modifier
+                          .fillMaxWidth()
+                          .padding(10.dp),
+                      verticalAlignment = Alignment.CenterVertically,
+                      horizontalArrangement = Arrangement.SpaceBetween
+                  ) {
+                      Column(modifier = Modifier.weight(1f)) {
+                          Text(
+                              text = brainModeLabel,
+                              fontSize = 11.sp,
+                              fontWeight = FontWeight.ExtraBold,
+                              color = if (isMorningWindow) Color(0xFF81C784) else Color(0xFFFF8A80)
+                          )
+                          Text(
+                              text = "Wake: $lastWakeConfirm • Tamper Count: $tamperCount",
+                              fontSize = 11.sp,
+                              color = Color.LightGray
+                          )
+                      }
+                      OutlinedButton(
+                          onClick = onOpenGuardian,
+                          contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp)
+                      ) {
+                          Text(
+                              if (isGuardianLocked) "Partner PIN" else "Arm Lock",
+                              fontSize = 11.sp
+                          )
+                      }
+                  }
+              }
+          }
+
+          @Composable
+          fun ColumnScope.PlannerSectionContent(
+              context: Context,
+              isBatteryUnrestricted: Boolean,
+              currentHour: Int,
+              bedHour: Int,
+              bedMin: Int,
+              wakeHour: Int,
+              wakeMin: Int,
+              hasUsageAccess: Boolean,
+              screenMinutes: Int,
+              screenLimitMins: Int,
+              habits: List<IasHabit>,
+              tasks: List<TaskItem>,
+              todayTasks: List<TaskItem>,
+              completedToday: Int,
+              showTomorrowTab: Boolean,
+              selectedFilter: PillarCategory?,
+              isGuardianLocked: Boolean,
+              onToggleTomorrowTab: (Boolean) -> Unit,
+              onSelectFilter: (PillarCategory?) -> Unit,
+              onRefresh: () -> Unit,
+              onRunProtected: (String, () -> Unit) -> Unit,
+              onEditTask: (TaskItem) -> Unit
+          ) {
+              if (!isBatteryUnrestricted) {
+                  Card(
+                      colors = CardDefaults.cardColors(containerColor = Color(0xFF332610)),
+                      shape = RoundedCornerShape(10.dp),
+                      modifier = Modifier
+                          .fillMaxWidth()
+                          .padding(bottom = 8.dp)
+                  ) {
+                      Row(
+                          modifier = Modifier
+                              .fillMaxWidth()
+                              .padding(10.dp),
+                          verticalAlignment = Alignment.CenterVertically,
+                          horizontalArrangement = Arrangement.SpaceBetween
+                      ) {
+                          Column(modifier = Modifier.weight(1f)) {
+                              Text(
+                                  "Step 1 Protocol: Unrestricted Battery Needed",
+                                  fontWeight = FontWeight.Bold,
+                                  fontSize = 12.sp,
+                                  color = Color(0xFFFFD54F)
+                              )
+                              Text(
+                                  "Allow unrestricted battery so Android never delays your alarms.",
+                                  fontSize = 11.sp,
+                                  color = Color.LightGray
+                              )
+                          }
+                          OutlinedButton(
+                              onClick = {
+                                  val intent = Intent(
+                                      Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS,
+                                      Uri.parse("package:${context.packageName}")
+                                  )
+                                  context.startActivity(intent)
+                              }
+                          ) {
+                              Text("Allow", fontSize = 11.sp)
+                          }
+                      }
+                  }
+              }
+
+              if (currentHour >= bedHour || currentHour < wakeHour) {
+                  Card(
+                      colors = CardDefaults.cardColors(containerColor = Color(0xFFB71C1C)),
+                      shape = RoundedCornerShape(12.dp),
+                      modifier = Modifier
+                          .fillMaxWidth()
+                          .padding(bottom = 8.dp)
+                  ) {
+                      Row(
+                          modifier = Modifier
+                              .fillMaxWidth()
+                              .padding(12.dp),
+                          verticalAlignment = Alignment.CenterVertically,
+                          horizontalArrangement = Arrangement.SpaceBetween
+                      ) {
+                          Column(modifier = Modifier.weight(1f)) {
+                              Text(
+                                  "PAST %02d:%02d SLEEP CUTOFF!".format(bedHour, bedMin),
+                                  fontWeight = FontWeight.ExtraBold,
+                                  color = Color.White,
+                                  fontSize = 13.sp
+                              )
+                              Text(
+                                  "10:30 PM brain cannot renegotiate. Tap 1-Tap Sleep & lock phone.",
+                                  color = Color(0xFFFFCDD2),
+                                  fontSize = 11.sp
+                              )
+                          }
+                          Button(
+                              onClick = {
+                                  StorageHelper.performLazyNightRollover(context)
+                                  onRefresh()
+                                  Toast.makeText(
+                                      context,
+                                      "Tomorrow Locked! Goodnight!",
+                                      Toast.LENGTH_LONG
+                                  ).show()
+                              },
+                              colors = ButtonDefaults.buttonColors(containerColor = Color.White)
+                          ) {
+                              Text("1-Tap Sleep", color = Color(0xFFB71C1C), fontWeight = FontWeight.Bold, fontSize = 11.sp)
+                          }
+                      }
+                  }
+              }
+
+              ScreenTimeBudgetCard(
+                  hasPermission = hasUsageAccess,
+                  usedMinutes = screenMinutes,
+                  limitMinutes = screenLimitMins,
+                  onGrantPermission = {
+                      context.startActivity(Intent(Settings.ACTION_USAGE_ACCESS_SETTINGS))
+                  }
+              )
+
+              Spacer(modifier = Modifier.height(8.dp))
+
+              IasNonNegotiablesCard(
+                  habits = habits,
+                  isLocked = isGuardianLocked,
+                  onToggleHabit = { habit ->
+                      if (habit.isDone && isGuardianLocked) {
+                          onRunProtected("Uncheck Completed Habit '${habit.title}'") {
+                              val updated = habits.map {
+                                  if (it.id == habit.id) it.copy(isDone = false) else it
+                              }
+                              StorageHelper.saveHabits(context, updated)
+                              onRefresh()
+                          }
+                      } else {
+                          val updated = habits.map {
+                              if (it.id == habit.id) it.copy(isDone = !it.isDone) else it
+                          }
+                          StorageHelper.saveHabits(context, updated)
+                          onRefresh()
+                      }
+                  },
+                  onResetHabits = {
+                      onRunProtected("Reset Daily Non-Negotiable Habits") {
+                          val updated = habits.map { it.copy(isDone = false) }
+                          StorageHelper.saveHabits(context, updated)
+                          onRefresh()
+                      }
+                  }
+              )
+
+              Spacer(modifier = Modifier.height(8.dp))
+
+              Row(
+                  modifier = Modifier.fillMaxWidth(),
+                  horizontalArrangement = Arrangement.SpaceBetween,
+                  verticalAlignment = Alignment.CenterVertically
+              ) {
+                  Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                      FilterChip(
+                          selected = !showTomorrowTab,
+                          onClick = { onToggleTomorrowTab(false) },
+                          label = { Text("Today ($completedToday/${todayTasks.size})") }
+                      )
+                      FilterChip(
+                          selected = showTomorrowTab,
+                          onClick = { onToggleTomorrowTab(true) },
+                          label = { Text("Tomorrow (${tasks.count { it.isTomorrow }})") }
+                      )
+                  }
+                  TextButton(
+                      onClick = {
+                          if (currentHour in 20..23) {
+                              StorageHelper.performLazyNightRollover(context)
+                              onRefresh()
+                              Toast.makeText(context, "Night Rollover Complete!", Toast.LENGTH_SHORT).show()
+                          } else {
+                              onRunProtected("Daytime Rollover / Auto-Fill Reset") {
+                                  StorageHelper.performLazyNightRollover(context)
+                                  onRefresh()
+                                  Toast.makeText(context, "Default Day Auto-Filled!", Toast.LENGTH_SHORT).show()
+                              }
+                          }
+                      }
+                  ) {
+                      Text("Rollover / Fill", fontSize = 12.sp, color = Color(0xFF81C784))
+                  }
+              }
+
+              Row(
+                  modifier = Modifier
+                      .fillMaxWidth()
+                      .horizontalScroll(rememberScrollState()),
+                  horizontalArrangement = Arrangement.spacedBy(8.dp)
+              ) {
+                  FilterChip(
+                      selected = selectedFilter == null,
+                      onClick = { onSelectFilter(null) },
+                      label = { Text("All Roles") }
+                  )
+                  PillarCategory.entries.forEach { cat ->
+                      FilterChip(
+                          selected = selectedFilter == cat,
+                          onClick = { onSelectFilter(if (selectedFilter == cat) null else cat) },
+                          label = { Text(cat.label) }
+                      )
+                  }
+              }
+
+              Spacer(modifier = Modifier.height(6.dp))
+
+              val visibleTasks = tasks
+                  .filter { it.isTomorrow == showTomorrowTab }
+                  .filter { selectedFilter == null || it.category == selectedFilter }
+                  .sortedBy { it.timeString }
+
+              LazyColumn(
+                  modifier = Modifier.weight(1f),
+                  verticalArrangement = Arrangement.spacedBy(8.dp),
+                  contentPadding = PaddingValues(bottom = 88.dp)
+              ) {
+                  items(visibleTasks, key = { it.id }) { task ->
+                      TaskRowCard(
+                          task = task,
+                          isLocked = isGuardianLocked,
+                          onToggle = {
+                              if (task.isCompleted && isGuardianLocked) {
+                                  onRunProtected("Uncheck Completed Task '${task.title}'") {
+                                      val updated = tasks.map {
+                                          if (it.id == task.id) it.copy(isCompleted = false) else it
+                                      }
+                                      StorageHelper.saveTasks(context, updated)
+                                      updated.find { it.id == task.id }?.let {
+                                          AlarmScheduler.scheduleTaskAlarm(context, it)
+                                      }
+                                      onRefresh()
+                                  }
+                              } else {
+                                  val updated = tasks.map {
+                                      if (it.id == task.id) it.copy(isCompleted = !it.isCompleted) else it
+                                  }
+                                  StorageHelper.saveTasks(context, updated)
+                                  updated.find { it.id == task.id }?.let {
+                                      AlarmScheduler.scheduleTaskAlarm(context, it)
+                                  }
+                                  onRefresh()
+                              }
+                          },
+                          onEdit = {
+                              onRunProtected("Edit Task '${task.title}'") {
+                                  onEditTask(task)
+                              }
+                          },
+                          onDelete = {
+                              onRunProtected("Delete Task '${task.title}'") {
+                                  AlarmScheduler.cancelTaskAlarm(context, task.id)
+                                  val updated = tasks.filterNot { it.id == task.id }
+                                  StorageHelper.saveTasks(context, updated)
+                                  onRefresh()
+                              }
+                          }
+                      )
+                  }
+              }
+          }
+
+          @Composable
+          fun LeakageAnalyticsSection(
+              analytics: LeakageAnalyticsSnapshot,
+              screenMinutes: Int,
+              screenLimitMins: Int,
+              wakeHour: Int,
+              wakeMin: Int,
+              onLogWakeNow: () -> Unit
+          ) {
+              Column(
+                  modifier = Modifier
+                      .fillMaxSize()
+                      .verticalScroll(rememberScrollState()),
+                  verticalArrangement = Arrangement.spacedBy(10.dp)
+              ) {
+                  Card(
+                      shape = RoundedCornerShape(12.dp),
+                      colors = CardDefaults.cardColors(containerColor = Color(0xFF16222F)),
+                      modifier = Modifier.fillMaxWidth()
+                  ) {
+                      Column(modifier = Modifier.padding(14.dp)) {
+                          Text(
+                              "COMPOUNDING MATH: 30-DAY DEEP WORK RECOVERY",
+                              fontSize = 12.sp,
+                              fontWeight = FontWeight.ExtraBold,
+                              color = Color(0xFF90CAF9)
+                          )
+                          Spacer(modifier = Modifier.height(6.dp))
+                          Text(
+                              text = "+%.1f Hours Protected".format(analytics.netUpscHoursRecovered30d),
+                              fontSize = 24.sp,
+                              fontWeight = FontWeight.ExtraBold,
+                              color = Color(0xFF81C784)
+                          )
+                          Text(
+                              text = "Eliminating two 15m snoozes + 45m of post-10PM drift saves 37.5h/month of UPSC prep. Below is your real-time leakage math.",
+                              fontSize = 11.sp,
+                              color = Color.LightGray
+                          )
+                      }
+                  }
+
+                  Card(
+                      shape = RoundedCornerShape(10.dp),
+                      colors = CardDefaults.cardColors(containerColor = Color(0xFF1A2129)),
+                      modifier = Modifier.fillMaxWidth()
+                  ) {
+                      Row(
+                          modifier = Modifier
+                              .fillMaxWidth()
+                              .padding(12.dp),
+                          horizontalArrangement = Arrangement.SpaceBetween,
+                          verticalAlignment = Alignment.CenterVertically
+                      ) {
+                          Column(modifier = Modifier.weight(1f)) {
+                              Text(
+                                  "1. Morning Wake-Up Variance (Target %02d:%02d)".format(wakeHour, wakeMin),
+                                  fontWeight = FontWeight.Bold,
+                                  fontSize = 13.sp,
+                                  color = Color.White
+                              )
+                              val todayVarText = when {
+                                  analytics.todayWakeVarianceMins == -999 -> "Not checked in today"
+                                  analytics.todayWakeVarianceMins <= 0 -> "${-analytics.todayWakeVarianceMins} mins early today"
+                                  else -> "+${analytics.todayWakeVarianceMins} mins late today"
+                              }
+                              Text(
+                                  "Today: $todayVarText • 30d Avg Variance: ${analytics.avgWakeVarianceMins}m",
+                                  fontSize = 11.sp,
+                                  color = Color(0xFFFFD54F)
+                              )
+                          }
+                          OutlinedButton(onClick = onLogWakeNow) {
+                              Text("Log Wake", fontSize = 11.sp)
+                          }
+                      }
+                  }
+
+                  Card(
+                      shape = RoundedCornerShape(10.dp),
+                      colors = CardDefaults.cardColors(containerColor = Color(0xFF1A2129)),
+                      modifier = Modifier.fillMaxWidth()
+                  ) {
+                      Column(modifier = Modifier.padding(12.dp)) {
+                          Text(
+                              "2. The 15-Minute Snooze Leak (1-Snooze Cap Active)",
+                              fontWeight = FontWeight.Bold,
+                              fontSize = 13.sp,
+                              color = Color.White
+                          )
+                          Spacer(modifier = Modifier.height(4.dp))
+                          Text(
+                              "Today Snoozes: ${analytics.todaySnoozeCount} (${analytics.todaySnoozeCount * 15} mins leaked)",
+                              fontSize = 12.sp,
+                              color = if (analytics.todaySnoozeCount == 0) Color(0xFF81C784) else Color(0xFFFF8A80)
+                          )
+                          Text(
+                              "30-Day Cumulative Snooze Leak: ${analytics.total30DaySnoozes} snoozes (${analytics.snoozeLeakMinutes30d} mins lost)",
+                              fontSize = 11.sp,
+                              color = Color.LightGray
+                          )
+                      }
+                  }
+
+                  Card(
+                      shape = RoundedCornerShape(10.dp),
+                      colors = CardDefaults.cardColors(containerColor = Color(0xFF1A2129)),
+                      modifier = Modifier.fillMaxWidth()
+                  ) {
+                      Column(modifier = Modifier.padding(12.dp)) {
+                          val compliancePct =
+                              ((analytics.daysUnderScreenCap.toFloat() / analytics.totalTrackedDays.coerceAtLeast(1)) * 100).toInt()
+                          Text(
+                              "3. Screen Budget Compliance & Post-Cutoff Drift",
+                              fontWeight = FontWeight.Bold,
+                              fontSize = 13.sp,
+                              color = Color.White
+                          )
+                          Spacer(modifier = Modifier.height(4.dp))
+                          Text(
+                              "Days Under ${screenLimitMins}m Budget: ${analytics.daysUnderScreenCap}/${analytics.totalTrackedDays} ($compliancePct%)",
+                              fontSize = 12.sp,
+                              color = Color(0xFF90CAF9)
+                          )
+                          Text(
+                              "Today Screen Used: $screenMinutes/${screenLimitMins}m • 30d Post-10PM Drift: ${analytics.postCutoffDriftMins30d}m",
+                              fontSize = 11.sp,
+                              color = Color.LightGray
+                          )
+                      }
+                  }
+
+                  Spacer(modifier = Modifier.height(24.dp))
+              }
+          }
+
+          @Composable
+          fun CabinAccountabilitySection(
+              context: Context,
+              cabinSeatId: String,
+              cabinManagerName: String,
+              cabinCheckInStamp: String,
+              cabinDeepMins: Int,
+              isSessionActive: Boolean,
+              isGuardianLocked: Boolean,
+              lastWakeConfirm: String,
+              completedToday: Int,
+              totalToday: Int,
+              habitsDone: Int,
+              habitsTotal: Int,
+              screenMinutes: Int,
+              screenLimitMins: Int,
+              tamperCount: Int,
+              onUpdateCabinConfig: (String, String) -> Unit,
+              onToggleCabinSession: () -> Unit
+          ) {
+              var showCabinEditModal by remember { mutableStateOf(false) }
+
+              val verificationPayload =
+                  "$cabinSeatId|$lastWakeConfirm|$cabinCheckInStamp|$completedToday/$totalToday|$habitsDone/$habitsTotal|$screenMinutes|$tamperCount"
+              val verificationHash = GuardianLockManager.shortVerificationCode(verificationPayload)
+
+              Column(
+                  modifier = Modifier
+                      .fillMaxSize()
+                      .verticalScroll(rememberScrollState()),
+                  verticalArrangement = Arrangement.spacedBy(10.dp)
+              ) {
+                  Card(
+                      shape = RoundedCornerShape(12.dp),
+                      colors = CardDefaults.cardColors(containerColor = Color(0xFF14261D)),
+                      modifier = Modifier.fillMaxWidth()
+                  ) {
+                      Column(modifier = Modifier.padding(14.dp)) {
+                          Row(
+                              modifier = Modifier.fillMaxWidth(),
+                              horizontalArrangement = Arrangement.SpaceBetween,
+                              verticalAlignment = Alignment.CenterVertically
+                          ) {
+                              Column(modifier = Modifier.weight(1f)) {
+                                  Text(
+                                      "READING ROOM CABIN ACCOUNTABILITY",
+                                      fontSize = 11.sp,
+                                      fontWeight = FontWeight.ExtraBold,
+                                      color = Color(0xFF81C784)
+                                  )
+                                  Text(
+                                      cabinSeatId,
+                                      fontSize = 17.sp,
+                                      fontWeight = FontWeight.Bold,
+                                      color = Color.White
+                                  )
+                                  Text(
+                                      "Verifier / Study Partner: $cabinManagerName",
+                                      fontSize = 11.sp,
+                                      color = Color.LightGray
+                                  )
+                              }
+                              OutlinedButton(onClick = { showCabinEditModal = true }) {
+                                  Icon(
+                                      if (isGuardianLocked) Icons.Default.Lock else Icons.Default.Edit,
+                                      contentDescription = null,
+                                      modifier = Modifier.size(14.dp)
+                                  )
+                                  Spacer(modifier = Modifier.width(4.dp))
+                                  Text("Seat ID", fontSize = 11.sp)
+                              }
+                          }
+
+                          Spacer(modifier = Modifier.height(10.dp))
+                          HorizontalDivider()
+                          Spacer(modifier = Modifier.height(10.dp))
+
+                          Row(
+                              modifier = Modifier.fillMaxWidth(),
+                              horizontalArrangement = Arrangement.SpaceBetween,
+                              verticalAlignment = Alignment.CenterVertically
+                          ) {
+                              Column {
+                                  Text(
+                                      "First Desk Check-In: $cabinCheckInStamp",
+                                      fontSize = 12.sp,
+                                      color = Color(0xFFFFD54F),
+                                      fontWeight = FontWeight.Bold
+                                  )
+                                  Text(
+                                      "Cabin Deep Focus Logged Today: $cabinDeepMins mins",
+                                      fontSize = 12.sp,
+                                      color = Color.White
+                                  )
+                              }
+                              Button(
+                                  onClick = onToggleCabinSession,
+                                  colors = ButtonDefaults.buttonColors(
+                                      containerColor = if (isSessionActive) Color(0xFFE53935) else Color(0xFF43A047)
+                                  )
+                              ) {
+                                  Icon(
+                                      if (isSessionActive) Icons.Default.Close else Icons.Default.PlayArrow,
+                                      contentDescription = null,
+                                      modifier = Modifier.size(16.dp)
+                                  )
+                                  Spacer(modifier = Modifier.width(4.dp))
+                                  Text(
+                                      if (isSessionActive) "End Desk Block" else "Check-In At Desk",
+                                      fontSize = 11.sp,
+                                      fontWeight = FontWeight.Bold
+                                  )
+                              }
+                          }
+                      }
+                  }
+
+                  Card(
+                      shape = RoundedCornerShape(12.dp),
+                      colors = CardDefaults.cardColors(containerColor = Color(0xFF1A2129)),
+                      modifier = Modifier.fillMaxWidth()
+                  ) {
+                      Column(modifier = Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                          Row(
+                              modifier = Modifier.fillMaxWidth(),
+                              horizontalArrangement = Arrangement.SpaceBetween,
+                              verticalAlignment = Alignment.CenterVertically
+                          ) {
+                              Text(
+                                  "DAILY CABIN VERIFICATION RECEIPT",
+                                  fontSize = 12.sp,
+                                  fontWeight = FontWeight.Bold,
+                                  color = Color(0xFF90CAF9)
+                              )
+                              Text(
+                                  "HASH #$verificationHash",
+                                  fontSize = 11.sp,
+                                  fontWeight = FontWeight.ExtraBold,
+                                  color = Color(0xFFFFD54F)
+                              )
+                          }
+                          Text("• Seat / Venue: $cabinSeatId", fontSize = 12.sp, color = Color.White)
+                          Text("• Morning Wake Check-In: $lastWakeConfirm", fontSize = 12.sp, color = Color.White)
+                          Text("• Cabin Desk Arrival: $cabinCheckInStamp ($cabinDeepMins mins logged)", fontSize = 12.sp, color = Color.White)
+                          Text("• Daily Blocks Completed: $completedToday / $totalToday", fontSize = 12.sp, color = Color.White)
+                          Text("• IAS Non-Negotiables: $habitsDone / $habitsTotal", fontSize = 12.sp, color = Color.White)
+                          Text("• Screen Budget Used: $screenMinutes / $screenLimitMins mins", fontSize = 12.sp, color = Color.White)
+                          Text(
+                              "• Anti-Cheat Tamper Count: $tamperCount",
+                              fontSize = 12.sp,
+                              color = if (tamperCount == 0) Color(0xFF81C784) else Color(0xFFFF8A80),
+                              fontWeight = FontWeight.Bold
+                          )
+
+                          Spacer(modifier = Modifier.height(6.dp))
+
+                          Button(
+                              onClick = {
+                                  val shareText = buildString {
+                                      appendLine("📌 *TRIFOCUS IAS • CABIN ACCOUNTABILITY PASS*")
+                                      appendLine("Seat: $cabinSeatId")
+                                      appendLine("Wake Check-In: $lastWakeConfirm")
+                                      appendLine("Cabin Desk Arrival: $cabinCheckInStamp ($cabinDeepMins mins)")
+                                      appendLine("Tasks Done: $completedToday/$totalToday | IAS Habits: $habitsDone/$habitsTotal")
+                                      appendLine("Screen Used: $screenMinutes/${screenLimitMins}m | Tamper Count: $tamperCount")
+                                      appendLine("Guardian Hash: #$verificationHash (Verified for $cabinManagerName)")
+                                  }
+                                  val sendIntent = Intent(Intent.ACTION_SEND).apply {
+                                      type = "text/plain"
+                                      putExtra(Intent.EXTRA_TEXT, shareText)
+                                  }
+                                  context.startActivity(Intent.createChooser(sendIntent, "Send Cabin Check-In Receipt"))
+                              },
+                              modifier = Modifier.fillMaxWidth()
+                          ) {
+                              Icon(Icons.Default.Share, contentDescription = null, modifier = Modifier.size(16.dp))
+                              Spacer(modifier = Modifier.width(6.dp))
+                              Text("1-Tap Share Cabin Receipt (WhatsApp / Partner)")
+                          }
+                      }
+                  }
+              }
+
+              if (showCabinEditModal) {
+                  var seatInput by remember { mutableStateOf(cabinSeatId) }
+                  var mgrInput by remember { mutableStateOf(cabinManagerName) }
+                  AlertDialog(
+                      onDismissRequest = { showCabinEditModal = false },
+                      title = { Text("Configure Reading Room Cabin Seat") },
+                      text = {
+                          Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                              OutlinedTextField(
+                                  value = seatInput,
+                                  onValueChange = { seatInput = it },
+                                  label = { Text("Reading Room & Cabin Seat ID") },
+                                  singleLine = true,
+                                  modifier = Modifier.fillMaxWidth()
+                              )
+                              OutlinedTextField(
+                                  value = mgrInput,
+                                  onValueChange = { mgrInput = it },
+                                  label = { Text("Cabin Manager / Peer Partner Name") },
+                                  singleLine = true,
+                                  modifier = Modifier.fillMaxWidth()
+                              )
+                          }
+                      },
+                      confirmButton = {
+                          Button(
+                              onClick = {
+                                  showCabinEditModal = false
+                                  onUpdateCabinConfig(seatInput.trim(), mgrInput.trim())
+                              }
+                          ) {
+                              Text("Save Cabin Seat")
+                          }
+                      },
+                      dismissButton = {
+                          TextButton(onClick = { showCabinEditModal = false }) { Text("Cancel") }
+                      }
+                  )
+              }
+          }
+
+          @Composable
+          fun ZeroCheatProtocolAndAuditSection(
+              context: Context,
+              hasUsageAccess: Boolean,
+              isBatteryUnrestricted: Boolean,
+              isGuardianLocked: Boolean,
+              partnerName: String,
+              wakeHour: Int,
+              wakeMin: Int,
+              bedHour: Int,
+              bedMin: Int,
+              screenLimitMins: Int,
+              tamperCount: Int,
+              lastTamperLog: String,
+              lastSundayAudit: String,
+              analytics: LeakageAnalyticsSnapshot,
+              completedToday: Int,
+              totalToday: Int,
+              cabinSeatId: String,
+              cabinDeepMins: Int,
+              onOpenGuardianModal: () -> Unit,
+              onPartnerSignOffSunday: () -> Unit
+          ) {
+              val step1Done = hasUsageAccess && isBatteryUnrestricted
+              val step2Done = isGuardianLocked
+              val step3Done = isGuardianLocked && GuardianLockManager.isBrainSplitEnforced(context)
+
+              val auditCode = GuardianLockManager.shortVerificationCode(
+                  "$partnerName|$tamperCount|${analytics.netUpscHoursRecovered30d}|$lastSundayAudit"
+              )
+
+              Column(
+                  modifier = Modifier
+                      .fillMaxSize()
+                      .verticalScroll(rememberScrollState()),
+                  verticalArrangement = Arrangement.spacedBy(10.dp)
+              ) {
+                  Card(
+                      shape = RoundedCornerShape(12.dp),
+                      colors = CardDefaults.cardColors(containerColor = Color(0xFF1A2129)),
+                      modifier = Modifier.fillMaxWidth()
+                  ) {
+                      Column(modifier = Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                          Text(
+                              "4-STEP ZERO-CHEAT HANDOVER PLAYBOOK",
+                              fontSize = 12.sp,
+                              fontWeight = FontWeight.ExtraBold,
+                              color = Color(0xFFFFD54F)
+                          )
+
+                          ProtocolStepRow(
+                              stepNumber = 1,
+                              title = "Grant System Locks (Usage Access + Unrestricted Battery)",
+                              subtitle = if (step1Done) "Active — OEM battery killers cannot silence alarms"
+                              else "Incomplete — Grant both permissions on Planner tab",
+                              isDone = step1Done
+                          )
+
+                          ProtocolStepRow(
+                              stepNumber = 2,
+                              title = "Lock 3 Non-Negotiable Anchors with Partner Password",
+                              subtitle = "Wake %02d:%02d • Sleep %02d:%02d • Screen Cap %dm (%s)".format(
+                                  wakeHour, wakeMin, bedHour, bedMin, screenLimitMins,
+                                  if (step2Done) "Locked by $partnerName" else "Unlocked"
+                              ),
+                              isDone = step2Done
+                          )
+
+                          ProtocolStepRow(
+                              stepNumber = 3,
+                              title = "Enforce 1-Snooze Rule & 6AM/10PM Brain Split",
+                              subtitle = if (step3Done) "Armed — Max 1 snooze/task & 10PM renegotiation blocked"
+                              else "Arm Guardian Lock to enforce 1-Snooze & Brain Split",
+                              isDone = step3Done
+                          )
+
+                          ProtocolStepRow(
+                              stepNumber = 4,
+                              title = "Run 60-Second Sunday Partner Audit",
+                              subtitle = "Last Signed Off: $lastSundayAudit",
+                              isDone = tamperCount == 0 && isGuardianLocked
+                          )
+                      }
+                  }
+
+                  Card(
+                      shape = RoundedCornerShape(12.dp),
+                      colors = CardDefaults.cardColors(containerColor = Color(0xFF23171B)),
+                      modifier = Modifier.fillMaxWidth()
+                  ) {
+                      Column(modifier = Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                          Row(
+                              modifier = Modifier.fillMaxWidth(),
+                              horizontalArrangement = Arrangement.SpaceBetween,
+                              verticalAlignment = Alignment.CenterVertically
+                          ) {
+                              Text(
+                                  "60-SECOND SUNDAY AUDIT REPORT",
+                                  fontSize = 12.sp,
+                                  fontWeight = FontWeight.ExtraBold,
+                                  color = Color(0xFFFF8A80)
+                              )
+                              Text(
+                                  "AUDIT #$auditCode",
+                                  fontSize = 11.sp,
+                                  fontWeight = FontWeight.Bold,
+                                  color = Color(0xFFFFD54F)
+                              )
+                          }
+
+                          Text("Accountability Partner: $partnerName", fontSize = 12.sp, color = Color.White)
+                          Text(
+                              "Tamper / Cheat Events: $tamperCount ($lastTamperLog)",
+                              fontSize = 12.sp,
+                              color = if (tamperCount == 0) Color(0xFF81C784) else Color(0xFFFF8A80),
+                              fontWeight = FontWeight.Bold
+                          )
+                          Text("Avg Wake Variance: ${analytics.avgWakeVarianceMins} mins", fontSize = 12.sp, color = Color.White)
+                          Text("30d Snoozes Used: ${analytics.total30DaySnoozes} (${analytics.snoozeLeakMinutes30d}m leaked)", fontSize = 12.sp, color = Color.White)
+                          Text("Screen Cap Compliance: ${analytics.daysUnderScreenCap}/${analytics.totalTrackedDays} days under ${screenLimitMins}m", fontSize = 12.sp, color = Color.White)
+                          Text(
+                              "Net Deep UPSC Hours Protected (30d): +%.1f hrs".format(analytics.netUpscHoursRecovered30d),
+                              fontSize = 12.sp,
+                              color = Color(0xFF81C784),
+                              fontWeight = FontWeight.Bold
+                          )
+
+                          Spacer(modifier = Modifier.height(6.dp))
+
+                          Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                              OutlinedButton(
+                                  onClick = {
+                                      val report = buildString {
+                                          appendLine("🛡️ *TRIFOCUS IAS • 60-SECOND SUNDAY AUDIT*")
+                                          appendLine("Partner: $partnerName | Audit Code: #$auditCode")
+                                          appendLine("Tamper Events: $tamperCount ($lastTamperLog)")
+                                          appendLine("Avg Wake Variance: ${analytics.avgWakeVarianceMins}m")
+                                          appendLine("30d Snooze Leak: ${analytics.snoozeLeakMinutes30d}m (${analytics.total30DaySnoozes} snoozes)")
+                                          appendLine("Days Under ${screenLimitMins}m Cap: ${analytics.daysUnderScreenCap}/${analytics.totalTrackedDays}")
+                                          appendLine("Cabin Seat: $cabinSeatId (Today: ${cabinDeepMins}m, Tasks: $completedToday/$totalToday)")
+                                          appendLine("Net UPSC Hours Protected: +%.1f hrs".format(analytics.netUpscHoursRecovered30d))
+                                      }
+                                      val intent = Intent(Intent.ACTION_SEND).apply {
+                                          type = "text/plain"
+                                          putExtra(Intent.EXTRA_TEXT, report)
+                                      }
+                                      context.startActivity(Intent.createChooser(intent, "Share Sunday Audit Report"))
+                                  },
+                                  modifier = Modifier.weight(1f)
+                              ) {
+                                  Text("Share Audit", fontSize = 11.sp)
+                              }
+
+                              Button(
+                                  onClick = {
+                                      if (!isGuardianLocked) {
+                                          onOpenGuardianModal()
+                                      } else {
+                                          onPartnerSignOffSunday()
+                                      }
+                                  },
+                                  modifier = Modifier.weight(1f)
+                              ) {
+                                  Text(
+                                      if (isGuardianLocked) "Partner Sign-Off" else "Arm Lock First",
+                                      fontSize = 11.sp
+                                  )
+                              }
+                          }
+                      }
+                  }
+
+                  Spacer(modifier = Modifier.height(24.dp))
+              }
+          }
+
+          @Composable
+          fun ProtocolStepRow(
+              stepNumber: Int,
+              title: String,
+              subtitle: String,
+              isDone: Boolean
+          ) {
+              Row(
+                  modifier = Modifier.fillMaxWidth(),
+                  verticalAlignment = Alignment.CenterVertically,
+                  horizontalArrangement = Arrangement.spacedBy(10.dp)
+              ) {
+                  Icon(
+                      if (isDone) Icons.Default.CheckCircle else Icons.Default.Warning,
+                      contentDescription = null,
+                      tint = if (isDone) Color(0xFF81C784) else Color(0xFFFFCA28),
+                      modifier = Modifier.size(20.dp)
+                  )
+                  Column(modifier = Modifier.weight(1f)) {
+                      Text(
+                          "Step $stepNumber: $title",
+                          fontSize = 12.sp,
+                          fontWeight = FontWeight.Bold,
+                          color = Color.White
+                      )
+                      Text(
+                          subtitle,
+                          fontSize = 11.sp,
+                          color = Color.LightGray
+                      )
+                  }
+              }
+          }
+
+          @Composable
+          fun ScreenTimeBudgetCard(
+              hasPermission: Boolean,
+              usedMinutes: Int,
+              limitMinutes: Int,
+              onGrantPermission: () -> Unit
+          ) {
+              val ratio = (usedMinutes.toFloat() / limitMinutes.coerceAtLeast(1)).coerceIn(0f, 1f)
+              val barColor = when {
+                  usedMinutes >= limitMinutes -> Color(0xFFEF5350)
+                  usedMinutes >= (limitMinutes * 0.75).toInt() -> Color(0xFFFFCA28)
+                  else -> Color(0xFF66BB6A)
+              }
+
+              Card(
+                  shape = RoundedCornerShape(12.dp),
+                  colors = CardDefaults.cardColors(containerColor = Color(0xFF1A2129)),
+                  modifier = Modifier.fillMaxWidth()
+              ) {
+                  Column(modifier = Modifier.padding(12.dp)) {
+                      if (!hasPermission) {
+                          Row(
+                              modifier = Modifier.fillMaxWidth(),
+                              horizontalArrangement = Arrangement.SpaceBetween,
+                              verticalAlignment = Alignment.CenterVertically
+                          ) {
+                              Column(modifier = Modifier.weight(1f)) {
+                                  Text(
+                                      "$limitMinutes-Min Daily Screen Time Guard",
+                                      fontWeight = FontWeight.Bold,
+                                      fontSize = 13.sp,
+                                      color = Color(0xFFFFD54F)
+                                  )
+                                  Text(
+                                      "Grant Usage Access so TriFocus enforces your daily screen cap.",
+                                      fontSize = 11.sp,
+                                      color = Color.Gray
+                                  )
+                              }
+                              OutlinedButton(onClick = onGrantPermission) {
+                                  Text("Enable", fontSize = 12.sp)
+                              }
+                          }
+                      } else {
+                          Row(
+                              modifier = Modifier.fillMaxWidth(),
+                              horizontalArrangement = Arrangement.SpaceBetween,
+                              verticalAlignment = Alignment.CenterVertically
+                          ) {
+                              Text(
+                                  text = if (usedMinutes >= limitMinutes)
+                                      "SCREEN LIMIT EXCEEDED — LOCK PHONE!"
+                                  else
+                                      "Daily Screen Budget (Locked Cap: ${limitMinutes}m)",
+                                  fontSize = 12.sp,
+                                  fontWeight = FontWeight.Bold,
+                                  color = barColor
+                              )
+                              Text(
+                                  text = "$usedMinutes / $limitMinutes mins",
+                                  fontSize = 12.sp,
+                                  fontWeight = FontWeight.Bold,
+                                  color = Color.White
+                              )
+                          }
+                          Spacer(modifier = Modifier.height(6.dp))
+                          LinearProgressIndicator(
+                              progress = { ratio },
+                              modifier = Modifier
+                                  .fillMaxWidth()
+                                  .height(7.dp),
+                              color = barColor,
+                              trackColor = Color(0xFF2C3540)
+                          )
+                      }
+                  }
+              }
+          }
+
+          @Composable
+          fun IasNonNegotiablesCard(
+              habits: List<IasHabit>,
+              isLocked: Boolean,
+              onToggleHabit: (IasHabit) -> Unit,
+              onResetHabits: () -> Unit
+          ) {
+              Card(
+                  shape = RoundedCornerShape(12.dp),
+                  colors = CardDefaults.cardColors(containerColor = Color(0xFF16222F)),
+                  modifier = Modifier.fillMaxWidth()
+              ) {
+                  Column(modifier = Modifier.padding(12.dp)) {
+                      Row(
+                          modifier = Modifier.fillMaxWidth(),
+                          horizontalArrangement = Arrangement.SpaceBetween,
+                          verticalAlignment = Alignment.CenterVertically
+                      ) {
+                          Text(
+                              "IAS DAILY NON-NEGOTIABLES (${habits.count { it.isDone }}/${habits.size})",
+                              fontSize = 12.sp,
+                              fontWeight = FontWeight.Bold,
+                              color = Color(0xFF90CAF9)
+                          )
+                          IconButton(onClick = onResetHabits, modifier = Modifier.size(22.dp)) {
+                              Icon(
+                                  if (isLocked) Icons.Default.Lock else Icons.Default.Refresh,
+                                  contentDescription = "Reset",
+                                  tint = Color(0xFF90CAF9)
+                              )
+                          }
+                      }
+                      Spacer(modifier = Modifier.height(6.dp))
+                      Row(
+                          modifier = Modifier
+                              .fillMaxWidth()
+                              .horizontalScroll(rememberScrollState()),
+                          horizontalArrangement = Arrangement.spacedBy(8.dp)
+                      ) {
+                          habits.forEach { habit ->
+                              AssistChip(
+                                  onClick = { onToggleHabit(habit) },
+                                  label = {
+                                      Text(
+                                          habit.title,
+                                          fontSize = 12.sp,
+                                          textDecoration = if (habit.isDone) TextDecoration.LineThrough else TextDecoration.None
+                                      )
+                                  },
+                                  leadingIcon = {
+                                      if (habit.isDone) {
+                                          Icon(
+                                              Icons.Default.CheckCircle,
+                                              contentDescription = null,
+                                              tint = Color(0xFF81C784),
+                                              modifier = Modifier.size(16.dp)
+                                          )
+                                      }
+                                  }
+                              )
+                          }
+                      }
+                  }
+              }
+          }
+
+          @Composable
+          fun TaskRowCard(
+              task: TaskItem,
+              isLocked: Boolean,
+              onToggle: () -> Unit,
+              onEdit: () -> Unit,
+              onDelete: () -> Unit
+          ) {
+              Card(
+                  shape = RoundedCornerShape(10.dp),
+                  colors = CardDefaults.cardColors(containerColor = Color(0xFF1A2129)),
+                  modifier = Modifier.fillMaxWidth()
+              ) {
+                  Row(
+                      modifier = Modifier
+                          .fillMaxWidth()
+                          .padding(10.dp),
+                      verticalAlignment = Alignment.CenterVertically
+                  ) {
+                      Checkbox(checked = task.isCompleted, onCheckedChange = { onToggle() })
+                      Column(
+                          modifier = Modifier
+                              .weight(1f)
+                              .padding(horizontal = 6.dp)
+                      ) {
+                          Text(
+                              text = task.title,
+                              fontSize = 14.sp,
+                              fontWeight = FontWeight.Medium,
+                              textDecoration = if (task.isCompleted) TextDecoration.LineThrough else TextDecoration.None,
+                              color = if (task.isCompleted) Color.Gray else Color.White
+                          )
+                          Spacer(modifier = Modifier.height(4.dp))
+                          Row(
+                              verticalAlignment = Alignment.CenterVertically,
+                              horizontalArrangement = Arrangement.spacedBy(8.dp)
+                          ) {
+                              Box(
+                                  modifier = Modifier
+                                      .background(
+                                          Color(task.category.colorHex).copy(alpha = 0.25f),
+                                          RoundedCornerShape(6.dp)
+                                      )
+                                      .padding(horizontal = 7.dp, vertical = 2.dp)
+                              ) {
+                                  Text(
+                                      text = task.category.label,
+                                      fontSize = 11.sp,
+                                      color = Color(task.category.colorHex),
+                                      fontWeight = FontWeight.SemiBold
+                                  )
+                              }
+                              Text(task.timeString, fontSize = 12.sp, color = Color(0xFFFFD54F))
+                          }
+                      }
+                      IconButton(onClick = onEdit) {
+                          Icon(
+                              Icons.Default.Edit,
+                              contentDescription = "Edit Task",
+                              tint = if (isLocked) Color.Gray else Color(0xFF90CAF9)
+                          )
+                      }
+                      IconButton(onClick = onDelete) {
+                          Icon(
+                              if (isLocked) Icons.Default.Lock else Icons.Default.Delete,
+                              contentDescription = "Delete Task",
+                              tint = if (isLocked) Color.Gray else Color(0xFFE57373)
+                          )
+                      }
+                  }
+              }
+          }
+
+          @Composable
+          fun AddOrEditTaskModal(
+              existingTask: TaskItem?,
+              defaultTomorrow: Boolean,
+              onDismiss: () -> Unit,
+              onSave: (TaskItem) -> Unit
+          ) {
+              val context = LocalContext.current
+              var title by remember { mutableStateOf(existingTask?.title ?: "") }
+              var category by remember { mutableStateOf(existingTask?.category ?: PillarCategory.UPSC) }
+              var timeString by remember { mutableStateOf(existingTask?.timeString ?: "09:00") }
+              var isTomorrow by remember { mutableStateOf(existingTask?.isTomorrow ?: defaultTomorrow) }
+
+              val quickTemplates = listOf(
+                  Triple("PSIR Optional Study Block", PillarCategory.UPSC, "06:30"),
+                  Triple("Reading Room Seat & Power Check", PillarCategory.READING_ROOM, "09:30"),
+                  Triple("GS Static + Newspaper Notes", PillarCategory.UPSC, "11:00"),
+                  Triple("Time-Boxed Coding Sprint (60m)", PillarCategory.CODING, "15:30"),
+                  Triple("Mains Answer Writing + Revision", PillarCategory.UPSC, "19:30")
+              )
+
+              AlertDialog(
+                  onDismissRequest = onDismiss,
+                  title = { Text(if (existingTask != null) "Edit Scheduled Task" else "Morning Planner: Add Block") },
+                  text = {
+                      Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                          if (existingTask == null) {
+                              Text("1-Tap Presets (Zero Typing):", fontSize = 12.sp, color = Color(0xFF81C784))
+                              Row(
+                                  modifier = Modifier.horizontalScroll(rememberScrollState()),
+                                  horizontalArrangement = Arrangement.spacedBy(6.dp)
+                              ) {
+                                  quickTemplates.forEach { (tplTitle, tplCat, tplTime) ->
+                                      AssistChip(
+                                          onClick = {
+                                              title = tplTitle
+                                              category = tplCat
+                                              timeString = tplTime
+                                          },
+                                          label = { Text(tplTitle, fontSize = 11.sp) }
+                                      )
+                                  }
+                              }
+                          }
+
+                          OutlinedTextField(
+                              value = title,
+                              onValueChange = { title = it },
+                              label = { Text("Task Name") },
+                              singleLine = true,
+                              modifier = Modifier.fillMaxWidth()
+                          )
+
+                          Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                              PillarCategory.entries.forEach { cat ->
+                                  FilterChip(
+                                      selected = category == cat,
+                                      onClick = { category = cat },
+                                      label = { Text(cat.label, fontSize = 11.sp) }
+                                  )
+                              }
+                          }
+
+                          Row(
+                              modifier = Modifier.fillMaxWidth(),
+                              horizontalArrangement = Arrangement.SpaceBetween,
+                              verticalAlignment = Alignment.CenterVertically
+                          ) {
+                              Text("Exact Alarm: $timeString", fontWeight = FontWeight.Bold)
+                              OutlinedButton(onClick = {
+                                  val parts = timeString.split(":")
+                                  val initH = parts.getOrNull(0)?.toIntOrNull() ?: 9
+                                  val initM = parts.getOrNull(1)?.toIntOrNull() ?: 0
+                                  TimePickerDialog(
+                                      context,
+                                      { _, h, m -> timeString = "%02d:%02d".format(h, m) },
+                                      initH,
+                                      initM,
+                                      true
+                                  ).show()
+                              }) {
+                                  Text("Change Time")
+                              }
+                          }
+
+                          Row(verticalAlignment = Alignment.CenterVertically) {
+                              Checkbox(checked = isTomorrow, onCheckedChange = { isTomorrow = it })
+                              Text("Schedule for Tomorrow", fontSize = 13.sp)
+                          }
+                      }
+                  },
+                  confirmButton = {
+                      Button(
+                          onClick = {
+                              if (title.isNotBlank()) {
+                                  val item = existingTask?.copy(
+                                      title = title.trim(),
+                                      category = category,
+                                      timeString = timeString,
+                                      isTomorrow = isTomorrow
+                                  ) ?: TaskItem(
+                                      title = title.trim(),
+                                      category = category,
+                                      timeString = timeString,
+                                      isTomorrow = isTomorrow
+                                  )
+                                  onSave(item)
+                              }
+                          }
+                      ) {
+                          Text("Lock Block & Arm Alarm")
+                      }
+                  },
+                  dismissButton = {
+                      TextButton(onClick = onDismiss) { Text("Cancel") }
+                  }
+              )
+          }
+
+          @Composable
+          fun ScheduleAndSleepModal(
+              isLocked: Boolean,
+              wakeHour: Int,
+              wakeMin: Int,
+              bedHour: Int,
+              bedMin: Int,
+              screenLimitMins: Int,
+              unfinishedCount: Int,
+              onUpdateWakeTime: (Int, Int) -> Unit,
+              onUpdateBedtime: (Int, Int) -> Unit,
+              onUpdateScreenLimit: (Int) -> Unit,
+              onLogWakeUpNow: () -> Unit,
+              onRolloverAndStartNewDay: () -> Unit,
+              onDismiss: () -> Unit
+          ) {
+              val context = LocalContext.current
+              AlertDialog(
+                  onDismissRequest = onDismiss,
+                  title = {
+                      Text(
+                          if (isLocked) "3 Non-Negotiable Anchors (Locked)"
+                          else "Configure 3 Non-Negotiable Anchors"
+                      )
+                  },
+                  text = {
+                      Column(
+                          modifier = Modifier.verticalScroll(rememberScrollState()),
+                          verticalArrangement = Arrangement.spacedBy(10.dp)
+                      ) {
+                          if (isLocked) {
+                              Text(
+                                  "Protected by Guardian Lock. Changing wake-up, sleep cutoff, or screen cap requires your Accountability Partner's password.",
+                                  fontSize = 11.sp,
+                                  color = Color(0xFFFF8A80)
+                              )
+                          }
+
+                          Text(
+                              "Anchor 1 — Morning Wake-Up: %02d:%02d".format(wakeHour, wakeMin),
+                              fontWeight = FontWeight.Bold,
+                              color = Color(0xFF81C784)
+                          )
+                          Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                              OutlinedButton(
+                                  onClick = {
+                                      TimePickerDialog(
+                                          context,
+                                          { _, h, m -> onUpdateWakeTime(h, m) },
+                                          wakeHour,
+                                          wakeMin,
+                                          true
+                                      ).show()
+                                  },
+                                  modifier = Modifier.weight(1f)
+                              ) {
+                                  Text(if (isLocked) "Unlock to Edit" else "Set Wake Time", fontSize = 11.sp)
+                              }
+                              Button(
+                                  onClick = onLogWakeUpNow,
+                                  modifier = Modifier.weight(1f)
+                              ) {
+                                  Text("Check-In Awake", fontSize = 11.sp)
+                              }
+                          }
+
+                          HorizontalDivider()
+
+                          Text(
+                              "Anchor 2 — Night Sleep Cutoff: %02d:%02d".format(bedHour, bedMin),
+                              fontWeight = FontWeight.Bold,
+                              color = Color(0xFFFFD54F)
+                          )
+                          OutlinedButton(
+                              onClick = {
+                                  TimePickerDialog(
+                                      context,
+                                      { _, h, m -> onUpdateBedtime(h, m) },
+                                      bedHour,
+                                      bedMin,
+                                      true
+                                  ).show()
+                              },
+                              modifier = Modifier.fillMaxWidth()
+                          ) {
+                              Text(if (isLocked) "Unlock to Change Sleep Time" else "Adjust Sleep Time")
+                          }
+
+                          HorizontalDivider()
+
+                          Text(
+                              "Anchor 3 — Daily Screen Time Cap: $screenLimitMins mins",
+                              fontWeight = FontWeight.Bold,
+                              color = Color(0xFF90CAF9)
+                          )
+                          Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                              listOf(30, 45, 60, 90).forEach { preset ->
+                                  FilterChip(
+                                      selected = screenLimitMins == preset,
+                                      onClick = { onUpdateScreenLimit(preset) },
+                                      label = { Text("${preset}m", fontSize = 11.sp) }
+                                  )
+                              }
+                          }
+
+                          HorizontalDivider()
+
+                          Text(
+                              "Unfinished tasks today: $unfinishedCount\nNight Rollover carries over unfinished work, loads tomorrow's core blocks, and resets daily IAS habits.",
+                              fontSize = 12.sp
+                          )
+                      }
+                  },
+                  confirmButton = {
+                      Button(onClick = onRolloverAndStartNewDay) {
+                          Text("1-Tap Rollover & Sleep")
+                      }
+                  },
+                  dismissButton = {
+                      TextButton(onClick = onDismiss) { Text("Close") }
+                  }
+              )
+          }
+
+          @Composable
+          fun GuardianLockModal(
+              isLocked: Boolean,
+              hasExistingPassword: Boolean,
+              currentPartnerName: String,
+              currentLockAddTasks: Boolean,
+              currentEnforceBrainSplit: Boolean,
+              tamperCount: Int,
+              lastTamperLog: String,
+              lastWakeConfirm: String,
+              onSetPasswordAndLock: (String, String, Boolean, Boolean) -> Unit,
+              onRelockExisting: () -> Unit,
+              onAttemptUnlock: (String) -> Unit,
+              onResetTamper: () -> Unit,
+              onDismiss: () -> Unit
+          ) {
+              var partnerName by remember { mutableStateOf(currentPartnerName) }
+              var passwordInput by remember { mutableStateOf("") }
+              var confirmInput by remember { mutableStateOf("") }
+              var lockAddTasks by remember { mutableStateOf(currentLockAddTasks) }
+              var enforceBrainSplit by remember { mutableStateOf(currentEnforceBrainSplit) }
+              var errorText by remember { mutableStateOf<String?>(null) }
+
+              AlertDialog(
+                  onDismissRequest = onDismiss,
+                  title = {
+                      Text(
+                          if (isLocked) "Accountability Partner Unlock"
+                          else "Zero-Cheat Handover Protocol"
+                      )
+                  },
+                  text = {
+                      Column(
+                          modifier = Modifier.verticalScroll(rememberScrollState()),
+                          verticalArrangement = Arrangement.spacedBy(10.dp)
+                      ) {
+                          Card(
+                              colors = CardDefaults.cardColors(containerColor = Color(0xFF261C1C)),
+                              shape = RoundedCornerShape(8.dp),
+                              modifier = Modifier.fillMaxWidth()
+                          ) {
+                              Column(modifier = Modifier.padding(10.dp)) {
+                                  Text(
+                                      "AUDIT SNAPSHOT FOR ${currentPartnerName.uppercase()}",
+                                      fontSize = 11.sp,
+                                      fontWeight = FontWeight.Bold,
+                                      color = Color(0xFFFF8A80)
+                                  )
+                                  Text("Tamper / Cheat Attempts: $tamperCount", fontSize = 12.sp, color = Color.White)
+                                  Text("Latest Event: $lastTamperLog", fontSize = 11.sp, color = Color.LightGray)
+                                  Text("Last Morning Wake Check-In: $lastWakeConfirm", fontSize = 11.sp, color = Color(0xFF81C784))
+                              }
+                          }
+
+                          if (isLocked) {
+                              Text(
+                                  "Hand phone to $currentPartnerName to unlock settings, edit tasks, or sign off Sunday Audit.",
+                                  fontSize = 12.sp
+                              )
+                              OutlinedTextField(
+                                  value = passwordInput,
+                                  onValueChange = { passwordInput = it },
+                                  label = { Text("Partner Password / PIN") },
+                                  visualTransformation = PasswordVisualTransformation(),
+                                  singleLine = true,
+                                  modifier = Modifier.fillMaxWidth()
+                              )
+                          } else {
+                              Text(
+                                  "Hand your phone to your Accountability Partner. Once locked, you cannot alter Wake Time, Sleep Cutoff, Screen Cap, or delete tasks without their password.",
+                                  fontSize = 12.sp,
+                                  color = Color.LightGray
+                              )
+                              OutlinedTextField(
+                                  value = partnerName,
+                                  onValueChange = { partnerName = it },
+                                  label = { Text("Accountability Partner Name") },
+                                  singleLine = true,
+                                  modifier = Modifier.fillMaxWidth()
+                              )
+                              OutlinedTextField(
+                                  value = passwordInput,
+                                  onValueChange = { passwordInput = it },
+                                  label = { Text("Set Partner Password (4+ chars)") },
+                                  visualTransformation = PasswordVisualTransformation(),
+                                  singleLine = true,
+                                  modifier = Modifier.fillMaxWidth()
+                              )
+                              OutlinedTextField(
+                                  value = confirmInput,
+                                  onValueChange = { confirmInput = it },
+                                  label = { Text("Confirm Partner Password") },
+                                  visualTransformation = PasswordVisualTransformation(),
+                                  singleLine = true,
+                                  modifier = Modifier.fillMaxWidth()
+                              )
+
+                              Row(verticalAlignment = Alignment.CenterVertically) {
+                                  Checkbox(
+                                      checked = enforceBrainSplit,
+                                      onCheckedChange = { enforceBrainSplit = it }
+                                  )
+                                  Text(
+                                      "Idea #1: 6AM Planner vs 10PM Executor Split (Allow adding tasks only 05:30–09:30 AM)",
+                                      fontSize = 11.sp
+                                  )
+                              }
+
+                              Row(verticalAlignment = Alignment.CenterVertically) {
+                                  Checkbox(
+                                      checked = lockAddTasks,
+                                      onCheckedChange = { lockAddTasks = it }
+                                  )
+                                  Text(
+                                      "Full 24h Task Lock (Require Partner PIN even at 6:00 AM)",
+                                      fontSize = 11.sp
+                                  )
+                              }
+
+                              if (tamperCount > 0) {
+                                  OutlinedButton(
+                                      onClick = onResetTamper,
+                                      modifier = Modifier.fillMaxWidth()
+                                  ) {
+                                      Text("Sign Off & Clear Tamper Counter ($tamperCount)")
+                                  }
+                              }
+                          }
+
+                          if (errorText != null) {
+                              Text(errorText!!, color = Color(0xFFEF5350), fontSize = 12.sp)
+                          }
+                      }
+                  },
+                  confirmButton = {
+                      if (isLocked) {
+                          Button(
+                              onClick = {
+                                  if (passwordInput.isNotBlank()) {
+                                      onAttemptUnlock(passwordInput)
+                                  }
+                              }
+                          ) {
+                              Text("Unlock App")
+                          }
+                      } else {
+                          Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                              if (hasExistingPassword && passwordInput.isBlank()) {
+                                  OutlinedButton(onClick = onRelockExisting) {
+                                      Text("Re-Lock")
+                                  }
+                              }
+                              Button(
+                                  onClick = {
+                                      when {
+                                          passwordInput.length < 4 ->
+                                              errorText = "Password must be at least 4 characters."
+                                          passwordInput != confirmInput ->
+                                              errorText = "Passwords do not match!"
+                                          else ->
+                                              onSetPasswordAndLock(
+                                                  partnerName.trim(),
+                                                  passwordInput,
+                                                  lockAddTasks,
+                                                  enforceBrainSplit
+                                              )
+                                      }
+                                  }
+                              ) {
+                                  Text("Set Password & Lock")
+                              }
+                          }
+                      }
+                  },
+                  dismissButton = {
+                      TextButton(onClick = onDismiss) { Text("Cancel") }
+                  }
+              )
+          }
+
+          @Composable
+          fun GuardianActionVerifyDialog(
+              actionLabel: String,
+              partnerName: String,
+              onVerify: (String) -> Unit,
+              onDismiss: () -> Unit
+          ) {
+              var pass by remember { mutableStateOf("") }
+              AlertDialog(
+                  onDismissRequest = onDismiss,
+                  title = { Text("Guardian Password Required") },
+                  text = {
+                      Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                          Text(
+                              "Blocked by Anti-Cheat: $actionLabel",
+                              fontSize = 13.sp,
+                              fontWeight = FontWeight.Bold,
+                              color = Color(0xFFFF8A80)
+                          )
+                          Text(
+                              "Your 10:30 PM brain cannot renegotiate your 6:00 AM contract. Ask $partnerName to enter the Guardian Password.",
+                              fontSize = 12.sp
+                          )
+                          OutlinedTextField(
+                              value = pass,
+                              onValueChange = { pass = it },
+                              label = { Text("Partner Password") },
+                              visualTransformation = PasswordVisualTransformation(),
+                              singleLine = true,
+                              modifier = Modifier.fillMaxWidth()
+                          )
+                      }
+                  },
+                  confirmButton = {
+                      Button(onClick = { onVerify(pass) }) {
+                          Text("Authorize")
+                      }
+                  },
+                  dismissButton = {
+                      TextButton(onClick = onDismiss) { Text("Cancel") }
+                  }
+              )
+          }
+
+          object StorageHelper {
+              private const val KEY_TASKS = "saved_tasks_json_v4"
+              private const val KEY_HABITS = "saved_habits_json_v4"
+              private const val KEY_SNOOZE_DAY = "snooze_day_of_year"
+              private const val KEY_SNOOZE_MAP = "snooze_counts_json"
+              private const val KEY_TOTAL_30D_SNOOZES = "total_30d_snoozes"
+              private const val KEY_WAKE_VARIANCE_TODAY = "wake_variance_today"
+              private const val KEY_WAKE_VARIANCE_HISTORY = "wake_variance_history_json"
+              private const val KEY_POST_CUTOFF_DRIFT_30D = "post_cutoff_drift_mins_30d"
+              private const val KEY_LAST_DRIFT_RECORD_DAY = "last_drift_record_day"
+              private const val KEY_DAYS_TRACKED = "days_tracked_count"
+              private const val KEY_DAYS_UNDER_CAP = "days_under_cap_count"
+
+              private const val KEY_CABIN_SEAT_ID = "cabin_seat_id"
+              private const val KEY_CABIN_MANAGER = "cabin_manager_name"
+              private const val KEY_CABIN_CHECKIN_DAY = "cabin_checkin_day"
+              private const val KEY_CABIN_CHECKIN_STAMP = "cabin_checkin_stamp"
+              private const val KEY_CABIN_DEEP_MINS = "cabin_deep_mins_today"
+              private const val KEY_CABIN_SESSION_START = "cabin_session_start_millis"
+
+              fun recordMorningWakeCheckIn(context: Context): Int {
+                  val prefs = context.getSharedPreferences("trifocus_prefs", Context.MODE_PRIVATE)
+                  val wakeH = prefs.getInt("wake_hour", 5)
+                  val wakeM = prefs.getInt("wake_min", 30)
+                  val now = Calendar.getInstance()
+                  val nowMins = now.get(Calendar.HOUR_OF_DAY) * 60 + now.get(Calendar.MINUTE)
+                  val targetMins = wakeH * 60 + wakeM
+                  val variance = (nowMins - targetMins).coerceIn(-180, 360)
+
+                  val stamp = SimpleDateFormat("HH:mm", Locale.getDefault()).format(Date())
+                  val historyRaw = prefs.getString(KEY_WAKE_VARIANCE_HISTORY, "[]") ?: "[]"
+                  val arr = try { JSONArray(historyRaw) } catch (e: Exception) { JSONArray() }
+                  arr.put(variance)
+                  val trimmed = JSONArray()
+                  val startIdx = (arr.length() - 30).coerceAtLeast(0)
+                  for (i in startIdx until arr.length()) {
+                      trimmed.put(arr.getInt(i))
+                  }
+
+                  val varBadge = if (variance <= 0) "${variance}m" else "+${variance}m"
+                  prefs.edit()
+                      .putString("last_wake_confirm", "$stamp ($varBadge)")
+                      .putInt("last_wake_day", now.get(Calendar.DAY_OF_YEAR))
+                      .putInt(KEY_WAKE_VARIANCE_TODAY, variance)
+                      .putString(KEY_WAKE_VARIANCE_HISTORY, trimmed.toString())
+                      .apply()
+                  return variance
+              }
+
+              fun getSnoozeCountToday(context: Context, taskId: String): Int {
+                  val prefs = context.getSharedPreferences("trifocus_prefs", Context.MODE_PRIVATE)
+                  val today = Calendar.getInstance().get(Calendar.DAY_OF_YEAR)
+                  if (prefs.getInt(KEY_SNOOZE_DAY, -1) != today) return 0
+                  val raw = prefs.getString(KEY_SNOOZE_MAP, "{}") ?: "{}"
+                  return try {
+                      JSONObject(raw).optInt(taskId, 0)
+                  } catch (e: Exception) {
+                      0
+                  }
+              }
+
+              fun getTotalSnoozesTodayAllTasks(context: Context): Int {
+                  val prefs = context.getSharedPreferences("trifocus_prefs", Context.MODE_PRIVATE)
+                  val today = Calendar.getInstance().get(Calendar.DAY_OF_YEAR)
+                  if (prefs.getInt(KEY_SNOOZE_DAY, -1) != today) return 0
+                  val raw = prefs.getString(KEY_SNOOZE_MAP, "{}") ?: "{}"
+                  return try {
+                      val obj = JSONObject(raw)
+                      var sum = 0
+                      val keys = obj.keys()
+                      while (keys.hasNext()) {
+                          val k = keys.next()
+                          sum += obj.optInt(k, 0)
+                      }
+                      sum
+                  } catch (e: Exception) {
+                      0
+                  }
+              }
+
+              fun incrementSnoozeCountToday(context: Context, taskId: String) {
+                  val prefs = context.getSharedPreferences("trifocus_prefs", Context.MODE_PRIVATE)
+                  val today = Calendar.getInstance().get(Calendar.DAY_OF_YEAR)
+                  val obj = if (prefs.getInt(KEY_SNOOZE_DAY, -1) == today) {
+                      try {
+                          JSONObject(prefs.getString(KEY_SNOOZE_MAP, "{}") ?: "{}")
+                      } catch (e: Exception) {
+                          JSONObject()
+                      }
+                  } else {
+                      JSONObject()
+                  }
+                  obj.put(taskId, obj.optInt(taskId, 0) + 1)
+                  val total30d = prefs.getInt(KEY_TOTAL_30D_SNOOZES, 0) + 1
+                  prefs.edit()
+                      .putInt(KEY_SNOOZE_DAY, today)
+                      .putString(KEY_SNOOZE_MAP, obj.toString())
+                      .putInt(KEY_TOTAL_30D_SNOOZES, total30d)
+                      .apply()
+              }
+
+              fun recordPostCutoffDriftPulse(context: Context, totalScreenMinsToday: Int) {
+                  val prefs = context.getSharedPreferences("trifocus_prefs", Context.MODE_PRIVATE)
+                  val limit = prefs.getInt("screen_limit_mins", 60)
+                  val today = Calendar.getInstance().get(Calendar.DAY_OF_YEAR)
+                  if (totalScreenMinsToday > limit && prefs.getInt(KEY_LAST_DRIFT_RECORD_DAY, -1) != today) {
+                      val overflow = (totalScreenMinsToday - limit).coerceAtMost(120)
+                      val prev = prefs.getInt(KEY_POST_CUTOFF_DRIFT_30D, 0)
+                      prefs.edit()
+                          .putInt(KEY_POST_CUTOFF_DRIFT_30D, prev + overflow)
+                          .putInt(KEY_LAST_DRIFT_RECORD_DAY, today)
+                          .apply()
+                  }
+              }
+
+              fun getLeakageAnalytics(
+                  context: Context,
+                  todayScreenMins: Int,
+                  screenLimitMins: Int
+              ): LeakageAnalyticsSnapshot {
+                  val prefs = context.getSharedPreferences("trifocus_prefs", Context.MODE_PRIVATE)
+                  val today = Calendar.getInstance().get(Calendar.DAY_OF_YEAR)
+                  val wakeDay = prefs.getInt("last_wake_day", -1)
+                  val todayWakeVar = if (wakeDay == today) prefs.getInt(KEY_WAKE_VARIANCE_TODAY, 0) else -999
+
+                  val histRaw = prefs.getString(KEY_WAKE_VARIANCE_HISTORY, "[]") ?: "[]"
+                  val avgVar = try {
+                      val arr = JSONArray(histRaw)
+                      if (arr.length() == 0) 0
+                      else {
+                          var sum = 0
+                          for (i in 0 until arr.length()) sum += kotlin.math.abs(arr.getInt(i))
+                          sum / arr.length()
+                      }
+                  } catch (e: Exception) {
+                      0
+                  }
+
+                  val todaySnoozes = getTotalSnoozesTodayAllTasks(context)
+                  val total30dSnoozes = prefs.getInt(KEY_TOTAL_30D_SNOOZES, todaySnoozes)
+                  val snoozeLeakMins = total30dSnoozes * 15
+                  val driftMins = prefs.getInt(KEY_POST_CUTOFF_DRIFT_30D, 0)
+
+                  val trackedDays = prefs.getInt(KEY_DAYS_TRACKED, 1).coerceAtLeast(1)
+                  val baseUnderCap = prefs.getInt(KEY_DAYS_UNDER_CAP, 1)
+                  val effectiveUnderCap = if (todayScreenMins <= screenLimitMins) {
+                      baseUnderCap.coerceAtLeast(1)
+                  } else {
+                      (baseUnderCap - 1).coerceAtLeast(0)
+                  }
+
+                  val leakedHours = (snoozeLeakMins + driftMins) / 60f
+                  val netProtected = (37.5f - leakedHours).coerceAtLeast(0f)
+
+                  return LeakageAnalyticsSnapshot(
+                      todayWakeVarianceMins = todayWakeVar,
+                      avgWakeVarianceMins = avgVar,
+                      todaySnoozeCount = todaySnoozes,
+                      total30DaySnoozes = total30dSnoozes,
+                      snoozeLeakMinutes30d = snoozeLeakMins,
+                      postCutoffDriftMins30d = driftMins,
+                      daysUnderScreenCap = effectiveUnderCap,
+                      totalTrackedDays = trackedDays,
+                      netUpscHoursRecovered30d = netProtected
+                  )
+              }
+
+              fun getCabinSeatId(context: Context): String {
+                  return context.getSharedPreferences("trifocus_prefs", Context.MODE_PRIVATE)
+                      .getString(KEY_CABIN_SEAT_ID, "Resilience Reading Room • Cabin A-01")
+                      ?: "Resilience Reading Room • Cabin A-01"
+              }
+
+              fun getCabinManagerName(context: Context): String {
+                  return context.getSharedPreferences("trifocus_prefs", Context.MODE_PRIVATE)
+                      .getString(KEY_CABIN_MANAGER, "Reading Room Coordinator")
+                      ?: "Reading Room Coordinator"
+              }
+
+              fun setCabinConfig(context: Context, seatId: String, managerName: String) {
+                  context.getSharedPreferences("trifocus_prefs", Context.MODE_PRIVATE).edit()
+                      .putString(KEY_CABIN_SEAT_ID, seatId.ifBlank { "Resilience Reading Room • Cabin A-01" })
+                      .putString(KEY_CABIN_MANAGER, managerName.ifBlank { "Reading Room Coordinator" })
+                      .apply()
+              }
+
+              fun getTodayCabinCheckIn(context: Context): String {
+                  val prefs = context.getSharedPreferences("trifocus_prefs", Context.MODE_PRIVATE)
+                  val today = Calendar.getInstance().get(Calendar.DAY_OF_YEAR)
+                  return if (prefs.getInt(KEY_CABIN_CHECKIN_DAY, -1) == today) {
+                      prefs.getString(KEY_CABIN_CHECKIN_STAMP, "Not checked in") ?: "Not checked in"
+                  } else {
+                      "Not checked in"
+                  }
+              }
+
+              fun isCabinSessionActive(context: Context): Boolean {
+                  val prefs = context.getSharedPreferences("trifocus_prefs", Context.MODE_PRIVATE)
+                  return prefs.getLong(KEY_CABIN_SESSION_START, 0L) > 0L
+              }
+
+              fun getTodayCabinDeepMinutes(context: Context): Int {
+                  val prefs = context.getSharedPreferences("trifocus_prefs", Context.MODE_PRIVATE)
+                  val today = Calendar.getInstance().get(Calendar.DAY_OF_YEAR)
+                  val saved = if (prefs.getInt(KEY_CABIN_CHECKIN_DAY, -1) == today) {
+                      prefs.getInt(KEY_CABIN_DEEP_MINS, 0)
+                  } else {
+                      0
+                  }
+                  val activeStart = prefs.getLong(KEY_CABIN_SESSION_START, 0L)
+                  val runningMins = if (activeStart > 0L) {
+                      ((System.currentTimeMillis() - activeStart) / 60000L).toInt().coerceAtLeast(0)
+                  } else {
+                      0
+                  }
+                  return saved + runningMins
+              }
+
+              fun toggleCabinDeepSession(context: Context) {
+                  val prefs = context.getSharedPreferences("trifocus_prefs", Context.MODE_PRIVATE)
+                  val today = Calendar.getInstance().get(Calendar.DAY_OF_YEAR)
+                  val activeStart = prefs.getLong(KEY_CABIN_SESSION_START, 0L)
+
+                  if (activeStart <= 0L) {
+                      val stamp = SimpleDateFormat("HH:mm", Locale.getDefault()).format(Date())
+                      val editor = prefs.edit()
+                          .putLong(KEY_CABIN_SESSION_START, System.currentTimeMillis())
+                      if (prefs.getInt(KEY_CABIN_CHECKIN_DAY, -1) != today) {
+                          editor.putInt(KEY_CABIN_CHECKIN_DAY, today)
+                              .putString(KEY_CABIN_CHECKIN_STAMP, stamp)
+                              .putInt(KEY_CABIN_DEEP_MINS, 0)
+                      }
+                      editor.apply()
+                  } else {
+                      val elapsedMins = ((System.currentTimeMillis() - activeStart) / 60000L).toInt().coerceAtLeast(1)
+                      val prev = if (prefs.getInt(KEY_CABIN_CHECKIN_DAY, -1) == today) {
+                          prefs.getInt(KEY_CABIN_DEEP_MINS, 0)
+                      } else {
+                          0
+                      }
+                      prefs.edit()
+                          .putLong(KEY_CABIN_SESSION_START, 0L)
+                          .putInt(KEY_CABIN_DEEP_MINS, prev + elapsedMins)
+                          .apply()
+                  }
+              }
+
+              fun performLazyNightRollover(context: Context) {
+                  val prefs = context.getSharedPreferences("trifocus_prefs", Context.MODE_PRIVATE)
+                  val screenUsed = ScreenTimeTracker.getTodayScreenMinutes(context)
+                  val screenCap = prefs.getInt("screen_limit_mins", 60)
+                  val daysTracked = prefs.getInt(KEY_DAYS_TRACKED, 1) + 1
+                  val daysUnder = prefs.getInt(KEY_DAYS_UNDER_CAP, 1) + if (screenUsed <= screenCap) 1 else 0
+                  prefs.edit()
+                      .putInt(KEY_DAYS_TRACKED, daysTracked)
+                      .putInt(KEY_DAYS_UNDER_CAP, daysUnder)
+                      .putLong(KEY_CABIN_SESSION_START, 0L)
+                      .apply()
+
+                  val current = loadTasks(context)
+                  current.filter { it.isCompleted }.forEach {
+                      AlarmScheduler.cancelTaskAlarm(context, it.id)
+                  }
+
+                  val carriedOver = current.mapNotNull { task ->
+                      when {
+                          !task.isTomorrow && task.isCompleted -> null
+                          !task.isTomorrow && !task.isCompleted -> task.copy(isTomorrow = false)
+                          task.isTomorrow -> task.copy(isTomorrow = false)
+                          else -> null
+                      }
+                  }.toMutableList()
+
+                  val defaults = defaultSampleTasks()
+                  defaults.forEach { defTask ->
+                      if (carriedOver.none { it.title == defTask.title }) {
+                          carriedOver.add(defTask)
+                      }
+                  }
+
+                  saveTasks(context, carriedOver)
+                  val resetHabits = loadHabits(context).map { it.copy(isDone = false) }
+                  saveHabits(context, resetHabits)
+                  AlarmScheduler.scheduleAllRoutineAlarms(context)
+              }
+
+              fun saveTasks(context: Context, tasks: List<TaskItem>) {
+                  val array = JSONArray()
+                  tasks.forEach { t ->
+                      array.put(JSONObject().apply {
+                          put("id", t.id)
+                          put("title", t.title)
+                          put("category", t.category.name)
+                          put("timeString", t.timeString)
+                          put("isCompleted", t.isCompleted)
+                          put("isTomorrow", t.isTomorrow)
+                      })
+                  }
+                  context.getSharedPreferences("trifocus_prefs", Context.MODE_PRIVATE)
+                      .edit().putString(KEY_TASKS, array.toString()).apply()
+              }
+
+              fun loadTasks(context: Context): List<TaskItem> {
+                  val raw = context.getSharedPreferences("trifocus_prefs", Context.MODE_PRIVATE)
+                      .getString(KEY_TASKS, null) ?: return defaultSampleTasks()
+                  return try {
+                      val array = JSONArray(raw)
+                      List(array.length()) { i ->
+                          val obj = array.getJSONObject(i)
+                          TaskItem(
+                              id = obj.getString("id"),
+                              title = obj.getString("title"),
+                              category = PillarCategory.valueOf(obj.getString("category")),
+                              timeString = obj.getString("timeString"),
+                              isCompleted = obj.getBoolean("isCompleted"),
+                              isTomorrow = obj.optBoolean("isTomorrow", false)
+                          )
+                      }
+                  } catch (e: Exception) {
+                      defaultSampleTasks()
+                  }
+              }
+
+              fun saveHabits(context: Context, habits: List<IasHabit>) {
+                  val array = JSONArray()
+                  habits.forEach { h ->
+                      array.put(JSONObject().apply {
+                          put("id", h.id)
+                          put("title", h.title)
+                          put("isDone", h.isDone)
+                      })
+                  }
+                  context.getSharedPreferences("trifocus_prefs", Context.MODE_PRIVATE)
+                      .edit().putString(KEY_HABITS, array.toString()).apply()
+              }
+
+              fun loadHabits(context: Context): List<IasHabit> {
+                  val raw = context.getSharedPreferences("trifocus_prefs", Context.MODE_PRIVATE)
+                      .getString(KEY_HABITS, null) ?: return defaultIasHabits()
+                  return try {
+                      val array = JSONArray(raw)
+                      List(array.length()) { i ->
+                          val obj = array.getJSONObject(i)
+                          IasHabit(
+                              id = obj.getString("id"),
+                              title = obj.getString("title"),
+                              isDone = obj.getBoolean("isDone")
+                          )
+                      }
+                  } catch (e: Exception) {
+                      defaultIasHabits()
+                  }
+              }
+
+              private fun defaultIasHabits() = listOf(
+                  IasHabit("ca", "Newspaper & CA", false),
+                  IasHabit("gs", "GS Static Block", false),
+                  IasHabit("opt", "Optional Subject", false),
+                  IasHabit("aw", "Answer Writing", false),
+                  IasHabit("rev", "Active Recall", false)
+              )
+
+              private fun defaultSampleTasks() = listOf(
+                  TaskItem(
+                      title = "Morning Optional Deep Work (No Phone)",
+                      category = PillarCategory.UPSC,
+                      timeString = "06:30"
+                  ),
+                  TaskItem(
+                      title = "Reading Room Morning Check & Seat Ops",
+                      category = PillarCategory.READING_ROOM,
+                      timeString = "09:30"
+                  ),
+                  TaskItem(
+                      title = "GS Core + Newspaper Editorial Notes",
+                      category = PillarCategory.UPSC,
+                      timeString = "11:00"
+                  ),
+                  TaskItem(
+                      title = "Time-Boxed Coding Sprint (Strict 60m Cap)",
+                      category = PillarCategory.CODING,
+                      timeString = "15:30"
+                  ),
+                  TaskItem(
+                      title = "Evening Mains Answer Writing & Revision",
+                      category = PillarCategory.UPSC,
+                      timeString = "19:30"
+                  )
+              )
+          }
+          EOF
+
+      - name: Setup Gradle 8.10.2
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.10.2'
+
+      - name: Compile Ready-to-Install Debug APK
+        run: gradle assembleDebug --no-daemon
+
+      - name: Copy APK to Repository Root
+        run: cp app/build/outputs/apk/debug/app-debug.apk TriFocus-IAS-v4.apk
+
+      - name: Commit APK & 1-Tap Download Button Directly to Repo
+        shell: bash
+        run: |
+          cat << 'EOF' > README.md
+          # 📲 TriFocus IAS v4.0 — Guardian & Cabin Edition
+
+          ### 👉 [TAP HERE FOR 1-CLICK APK DOWNLOAD (DIRECT FROM REPO)](../../raw/HEAD/TriFocus-IAS-v4.apk)
+
+          ### 👉 [ALTERNATE DOWNLOAD (FROM GITHUB RELEASES)](../../releases/latest/download/TriFocus-IAS-v4.apk)
+
+          ---
+          **Or look in the file list right above this README:** tap **`TriFocus-IAS-v4.apk`** -> tap **Download raw file** (or the three dots `...` -> **Download**).
+          EOF
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add -f TriFocus-IAS-v4.apk README.md
+          git commit -m "Publish compiled TriFocus-IAS-v4.apk directly to repo [skip ci]" || true
+          git push || true
+
+      - name: Upload APK to Workflow Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: TriFocus-IAS-APK
+          path: TriFocus-IAS-v4.apk
+
+      - name: Publish Direct Download APK to GitHub Releases
+        uses: softprops/action-gh-release@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tag_name: v4.0-run-${{ github.run_number }}
+          name: "TriFocus IAS v4.0 - Guardian & Cabin Edition"
+          body: "Tap **TriFocus-IAS-v4.apk** under Assets below to download and install directly on your Android phone."
+          files: TriFocus-IAS-v4.apk
